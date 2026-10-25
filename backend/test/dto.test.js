@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { parseCreateAsset, parseUpdateAsset, parseListQuery } = require('../api/dto/assets.dto');
 const { parseProfileInput, toProfileDto } = require('../api/dto/exportProfiles.dto');
 const { parseExportRequest } = require('../api/dto/exports.dto');
+const { parseHistoryQuery } = require('../api/dto/borrowings.dto');
 
 const validAsset = {
   tag: 'LAP-1001',
@@ -143,4 +144,33 @@ test('export request: everything optional, defaults to all columns', () => {
 test('export request: nested errors are keyed by path', () => {
   const err = fieldsOf(() => parseExportRequest({ filters: { type: '!!', color: 'red' }, sort: { key: 'nope' } }));
   assert.deepEqual(Object.keys(err.fields).sort(), ['filters.color', 'filters.type', 'sort.key']);
+});
+
+test('history query: defaults, repeated statuses, trimmed search and limits', () => {
+  assert.deepEqual(parseHistoryQuery({}), {
+    filters: { status: [], search: undefined },
+    sort: { key: 'borrowedAt', direction: 'desc' },
+    page: 1,
+    pageSize: 25,
+  });
+  const q = parseHistoryQuery({
+    status: ['active', 'RETURNED', 'active'], search: ' laptop ', sort: 'dueAt', direction: 'asc', page: '2', pageSize: '100',
+  });
+  assert.deepEqual(q.filters, { status: ['ACTIVE', 'RETURNED'], search: 'laptop' });
+  assert.deepEqual(q.sort, { key: 'dueAt', direction: 'asc' });
+  assert.deepEqual([q.page, q.pageSize], [2, 100]);
+});
+
+test('history query: names every bad parameter in one 422', () => {
+  const err = fieldsOf(() => parseHistoryQuery({
+    status: 'FOO', sort: 'deleted_at', direction: 'up', page: '0', pageSize: '101', search: 'x'.repeat(101),
+  }));
+  assert.equal(err.status, 422);
+  assert.deepEqual(Object.keys(err.fields).sort(), ['direction', 'page', 'pageSize', 'search', 'sort', 'status']);
+});
+
+test('history query: rejects a NUL character in search and an absurd page number', () => {
+  const err = fieldsOf(() => parseHistoryQuery({ search: 'a\u0000b', page: '1000001' }));
+  assert.equal(err.status, 422);
+  assert.deepEqual(Object.keys(err.fields).sort(), ['page', 'search']);
 });

@@ -8,6 +8,7 @@ const PERMISSION_PREREQUISITES = {
   'assets.archive': ['assets.view'],
   'assets.restore': ['assets.view'],
   'exports.run': ['assets.view'],
+  'borrowings.return': ['borrowings.view'],
   'exportProfiles.create': ['exportProfiles.view'],
   'exportProfiles.update': ['exportProfiles.view'],
   'exportProfiles.delete': ['exportProfiles.view'],

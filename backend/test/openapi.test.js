@@ -83,6 +83,7 @@ test('every permission-protected operation declares its policy', () => {
     'POST /asset-types/{code}/attributes/{key}/restore',
     'GET /assets', 'POST /assets', 'GET /assets/{id}', 'PUT /assets/{id}', 'DELETE /assets/{id}',
     'POST /assets/{id}/restore', 'POST /exports/assets',
+    'GET /borrowings/history', 'POST /borrowings/{id}/return',
     'GET /export-profiles', 'POST /export-profiles', 'GET /export-profiles/{id}',
     'PUT /export-profiles/{id}', 'DELETE /export-profiles/{id}',
     'GET /permissions', 'GET /roles', 'POST /roles', 'GET /roles/{id}', 'PUT /roles/{id}',
