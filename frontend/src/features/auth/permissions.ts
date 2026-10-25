@@ -24,12 +24,14 @@ export function hasAnyPermission(
 export const ROUTE_PERMISSIONS = {
   inventory: ['assets.view'],
   exportProfiles: ['exportProfiles.view'],
+  borrowings: ['borrowings.view'],
   accessControl: ['roles.view', 'users.view'],
 } as const satisfies Record<string, readonly PermissionKey[]>
 
 export function firstPermittedRoute(session: Pick<AuthSession, 'permissions'> | null | undefined) {
   if (hasPermission(session, 'assets.view')) return '/inventory'
   if (hasPermission(session, 'exportProfiles.view')) return '/export-profiles'
+  if (hasPermission(session, 'borrowings.view')) return '/borrowings'
   if (hasAnyPermission(session, ROUTE_PERMISSIONS.accessControl)) return '/admin/access'
   return '/forbidden'
 }

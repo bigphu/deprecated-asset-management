@@ -5,6 +5,8 @@ export const PERMISSIONS = [
   'assets.archive',
   'assets.restore',
   'exports.run',
+  'borrowings.view',
+  'borrowings.return',
   'exportProfiles.view',
   'exportProfiles.create',
   'exportProfiles.update',

@@ -1,6 +1,14 @@
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Boxes, ChevronLeft, FileOutput, LogOut, Shapes, ShieldCheck } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  Boxes,
+  ChevronLeft,
+  FileOutput,
+  LogOut,
+  Shapes,
+  ShieldCheck,
+} from 'lucide-react'
 import { useAppDispatch, useAppSelector, toggleSidebar } from '@/app/store'
 import {
   hasAnyPermission,
@@ -26,6 +34,12 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Inventory',
     icon: <Boxes />,
     permissions: ['assets.view'],
+  },
+  {
+    to: '/borrowings',
+    label: 'Borrowings',
+    icon: <ArrowLeftRight />,
+    permissions: ['borrowings.view'],
   },
   {
     to: '/export-profiles',

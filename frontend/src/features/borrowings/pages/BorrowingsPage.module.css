@@ -1,0 +1,46 @@
+/* Tabs on the left, search takes the slack, as on the inventory toolbar. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.tabs {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface);
+}
+
+.tab {
+  height: 36px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--md-shape-full);
+  background: none;
+  color: var(--md-on-surface-variant);
+  font-size: var(--md-label-lg-size);
+  line-height: var(--md-label-lg-line);
+  letter-spacing: var(--md-label-lg-tracking);
+  font-weight: var(--md-label-lg-weight);
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--md-surface-container);
+}
+
+.tabActive,
+.tabActive:hover {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+.search {
+  flex: 1 1 280px;
+  max-width: 420px;
+  margin-left: auto;
+}
