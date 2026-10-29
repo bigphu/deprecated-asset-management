@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import { Button, EmptyState, PageHeader, Table } from '@/components/ui'
-import { describeError } from '@/lib/apiClient'
+import { PermissionGate } from '@/features/auth'
 import { useReferenceDataQuery } from '@/features/assets'
+import { describeError } from '@/lib/apiClient'
 import { AssetTypeFormModal } from '../components/AssetTypeFormModal'
 
 export function AssetTypesPage() {
@@ -55,10 +56,12 @@ export function AssetTypesPage() {
         title="Asset types"
         subtitle="The categories assets are filed under, as offered in the asset form's type selector."
         actions={
-          <Button variant="primary" onClick={() => setFormOpen(true)}>
-            <Plus size={18} aria-hidden="true" />
-            Create asset type
-          </Button>
+          <PermissionGate permission="assets.create">
+            <Button variant="primary" onClick={() => setFormOpen(true)}>
+              <Plus size={18} aria-hidden="true" />
+              Create asset type
+            </Button>
+          </PermissionGate>
         }
       />
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const { asyncHandler } = require('../errors');
-const { currentUser } = require('../middleware/currentUser');
+const { requirePermissions } = require('../middleware/permissions');
 const {
   parseCreateAssetType,
   parseCreateAttribute,
@@ -48,10 +48,9 @@ const router = express.Router();
  * Listing stays in GET /api/reference-data (`types`).
  */
 
-router.use(currentUser);
-
 router.post(
   '/',
+  requirePermissions('assets.view', 'assets.create'),
   asyncHandler(async (req, res) => {
     const input = parseCreateAssetType(req.body);
     const type = await assetTypes.createAssetType(input);
@@ -61,6 +60,7 @@ router.post(
 
 router.post(
   '/:code/attributes',
+  requirePermissions('assets.view', 'assets.update'),
   asyncHandler(async (req, res) => {
     const input = parseCreateAttribute(req.body);
     const attribute = await assetTypes.createAttribute(req.params.code.toUpperCase(), input);
@@ -70,6 +70,7 @@ router.post(
 
 router.put(
   '/:code/attributes/:key',
+  requirePermissions('assets.view', 'assets.update'),
   asyncHandler(async (req, res) => {
     const input = parseUpdateAttribute(req.body, req.params.key);
     const attribute = await assetTypes.updateAttribute(req.params.code.toUpperCase(), req.params.key, input);
@@ -79,6 +80,7 @@ router.put(
 
 router.delete(
   '/:code/attributes/:key',
+  requirePermissions('assets.view', 'assets.update'),
   asyncHandler(async (req, res) => {
     await assetTypes.setAttributeActive(req.params.code.toUpperCase(), req.params.key, false);
     res.status(204).end();
@@ -87,6 +89,7 @@ router.delete(
 
 router.post(
   '/:code/attributes/:key/restore',
+  requirePermissions('assets.view', 'assets.update'),
   asyncHandler(async (req, res) => {
     const attribute = await assetTypes.setAttributeActive(req.params.code.toUpperCase(), req.params.key, true);
     res.json(toAttributeDto(attribute));
@@ -101,6 +104,7 @@ function readType(req) {
 
 router.get(
   '/:code',
+  requirePermissions('assets.view'),
   asyncHandler(async (req, res) => {
     const type = await readType(req);
     res.json({ ...toAssetTypeDto(type), attributes: type.attributes.map(toAttributeDto) });
@@ -109,6 +113,7 @@ router.get(
 
 router.get(
   '/:code/attributes',
+  requirePermissions('assets.view'),
   asyncHandler(async (req, res) => {
     const type = await readType(req);
     res.json(type.attributes.map(toAttributeDto));

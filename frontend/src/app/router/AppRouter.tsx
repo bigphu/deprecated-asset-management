@@ -1,27 +1,86 @@
 import { Suspense, lazy } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppLayout } from '@/app/layout'
+import {
+  BootstrapLoading,
+  ForbiddenPage,
+  PublicOnlyRoute,
+  RequireAuth,
+  RequirePermission,
+  SignInPage,
+  firstPermittedRoute,
+  useCurrentSessionQuery,
+} from '@/features/auth'
 
 const InventoryPage = lazy(() =>
-  import('@/features/assets').then((m) => ({ default: m.InventoryPage })),
+  import('@/features/assets').then((module) => ({ default: module.InventoryPage })),
 )
 const ExportProfilesPage = lazy(() =>
-  import('@/features/export-profiles').then((m) => ({ default: m.ExportProfilesPage })),
+  import('@/features/export-profiles').then((module) => ({ default: module.ExportProfilesPage })),
 )
 const AssetTypesPage = lazy(() =>
-  import('@/features/asset-types').then((m) => ({ default: m.AssetTypesPage })),
+  import('@/features/asset-types').then((module) => ({ default: module.AssetTypesPage })),
 )
+const AccessControlPage = lazy(() =>
+  import('@/features/access-control').then((module) => ({ default: module.AccessControlPage })),
+)
+
+function FirstPermittedRoute() {
+  const { data: session } = useCurrentSessionQuery()
+  return <Navigate to={firstPermittedRoute(session)} replace />
+}
 
 export function AppRouter() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<BootstrapLoading />}>
       <Routes>
-        <Route element={<AppLayout />}>
-          <Route index element={<Navigate to="/inventory" replace />} />
-          <Route path="/inventory" element={<InventoryPage />} />
-          <Route path="/export-profiles" element={<ExportProfilesPage />} />
-          <Route path="/asset-types" element={<AssetTypesPage />} />
-          <Route path="*" element={<Navigate to="/inventory" replace />} />
+        <Route
+          path="/sign-in"
+          element={
+            <PublicOnlyRoute>
+              <SignInPage />
+            </PublicOnlyRoute>
+          }
+        />
+
+        <Route element={<RequireAuth />}>
+          <Route element={<AppLayout />}>
+            <Route index element={<FirstPermittedRoute />} />
+            <Route
+              path="/inventory"
+              element={
+                <RequirePermission permission="assets.view">
+                  <InventoryPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/export-profiles"
+              element={
+                <RequirePermission permission="exportProfiles.view">
+                  <ExportProfilesPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/asset-types"
+              element={
+                <RequirePermission permission="assets.view">
+                  <AssetTypesPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/admin/access"
+              element={
+                <RequirePermission permissions={['roles.view', 'users.view']} mode="any">
+                  <AccessControlPage />
+                </RequirePermission>
+              }
+            />
+            <Route path="/forbidden" element={<ForbiddenPage />} />
+            <Route path="*" element={<FirstPermittedRoute />} />
+          </Route>
         </Route>
       </Routes>
     </Suspense>
