@@ -1,6 +1,15 @@
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Boxes, ChevronLeft, FileOutput, LogOut, Shapes, ShieldCheck } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  Boxes,
+  ChevronLeft,
+  FileOutput,
+  History as HistoryIcon,
+  LogOut,
+  Shapes,
+  ShieldCheck,
+} from 'lucide-react'
 import { useAppDispatch, useAppSelector, toggleSidebar } from '@/app/store'
 import {
   hasAnyPermission,
@@ -28,6 +37,14 @@ const NAV_ITEMS: NavItem[] = [
     permissions: ['assets.view'],
   },
   {
+    to: '/borrowings',
+    label: 'Borrowings',
+    icon: <ArrowLeftRight />,
+    // Staff see every record; a borrower sees only their own (the API enforces it).
+    permissions: ['borrowings.view', 'borrowings.viewOwn'],
+    mode: 'any',
+  },
+  {
     to: '/export-profiles',
     label: 'Export profiles',
     icon: <FileOutput />,
@@ -38,6 +55,12 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Asset types',
     icon: <Shapes />,
     permissions: ['assets.view'],
+  },
+  {
+    to: '/activity',
+    label: 'Activity',
+    icon: <HistoryIcon />,
+    permissions: ['activity.view'],
   },
   {
     to: '/admin/access',

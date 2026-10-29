@@ -9,6 +9,8 @@ const db = require('../db/pool');
 const { ApiError } = require('../api/errors');
 const { validationError } = require('../api/validation');
 const { resolveAssetCodes } = require('./referenceData.repo');
+const { recordEvent } = require('./assetEvents.repo');
+const { escapeLike } = require('./sql');
 
 const SELECT_ASSET = `
   SELECT a.id,
@@ -44,10 +46,6 @@ const FILTER_COLUMNS = [
   ['status', 's.code'],
   ['location', 'l.code'],
 ];
-
-function escapeLike(term) {
-  return term.replace(/[\\%_]/g, '\\$&');
-}
 
 /** WHERE clause for the list's filters (S-02); reused unchanged by the export (ADR-0008). */
 function buildWhere(filters = {}) {
@@ -118,14 +116,6 @@ async function findAsset(id, client = db) {
 
 function assetNotFound() {
   return new ApiError(404, 'NOT_FOUND', 'Asset not found');
-}
-
-function recordEvent(client, assetId, eventType, userId, description, details = {}) {
-  return client.query(
-    `INSERT INTO asset_events (asset_id, event_type, actor_user_id, description, details)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [assetId, eventType, userId, description, JSON.stringify(details)],
-  );
 }
 
 async function resolveCodesOrThrow(client, input, keep) {

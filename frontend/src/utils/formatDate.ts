@@ -7,3 +7,15 @@ export function formatDateDisplay(iso: string): string {
     day: 'numeric',
   })
 }
+
+/** Local date and time of an ISO timestamp, e.g. "14 Feb 2024, 09:30" (with seconds for an audit trail). */
+export function formatDateTimeDisplay(iso: string, withSeconds = false): string {
+  return new Date(iso).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(withSeconds ? { second: '2-digit' } : {}),
+  })
+}

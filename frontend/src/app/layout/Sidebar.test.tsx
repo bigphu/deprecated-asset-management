@@ -32,6 +32,30 @@ describe('Sidebar permission filtering', () => {
     expect(within(nav).queryByRole('link', { name: 'Asset types' })).not.toBeInTheDocument()
   })
 
+  it('lists Borrowings only for a session that may view borrowings', () => {
+    const { unmount } = renderSidebar(['assets.view'])
+    expect(screen.queryByRole('link', { name: 'Borrowings' })).not.toBeInTheDocument()
+    unmount()
+
+    renderSidebar(['borrowings.view'])
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    expect(within(nav).getByRole('link', { name: 'Borrowings' })).toHaveAttribute('href', '/borrowings')
+    expect(within(nav).queryByRole('link', { name: 'Inventory' })).not.toBeInTheDocument()
+  })
+
+  it('shows a borrower Borrowings but not Activity, and Activity only to someone who may read the log', () => {
+    const { unmount } = renderSidebar(['borrowings.viewOwn'])
+    let nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    expect(within(nav).getByRole('link', { name: 'Borrowings' })).toBeInTheDocument()
+    expect(within(nav).queryByRole('link', { name: 'Activity' })).not.toBeInTheDocument()
+    unmount()
+
+    renderSidebar(['activity.view'])
+    nav = screen.getByRole('navigation', { name: 'Primary navigation' })
+    expect(within(nav).getByRole('link', { name: 'Activity' })).toHaveAttribute('href', '/activity')
+    expect(within(nav).queryByRole('link', { name: 'Borrowings' })).not.toBeInTheDocument()
+  })
+
   it('renders no navigation entries for a session without permissions', () => {
     renderSidebar([])
     const nav = screen.getByRole('navigation', { name: 'Primary navigation' })

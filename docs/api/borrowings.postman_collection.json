@@ -1,0 +1,655 @@
+{
+  "info": {
+    "name": "Asset Management - Borrowings (US-11 return, US-12 history)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Run the requests in order. \"Sign in\" stores the CSRF token; \"Active borrowings\" picks a record to return. Set `email`, `password` and, if the API is not on localhost:3000 with the Vite origin, `baseUrl`/`origin` (`origin` must be one of the API's ALLOWED_ORIGINS). The user needs `borrowings.view`, `borrowings.return` and `activity.view` (Admin or Asset Manager). The last requests sign in as a Borrower (`borrowerEmail`, `borrowerPassword`) and show that they only see their own history. Prerequisite: open borrowings linked to those accounts. There is no checkout endpoint yet, so load demo records with docs/api/borrowings-demo-seed.sql. Each run returns one open borrowing, so reload the data to run again."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "origin",
+      "value": "http://localhost:5173"
+    },
+    {
+      "key": "email",
+      "value": "manager@example.test"
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "csrfToken",
+      "value": ""
+    },
+    {
+      "key": "loanId",
+      "value": ""
+    },
+    {
+      "key": "assetTag",
+      "value": ""
+    },
+    {
+      "key": "staffUserId",
+      "value": ""
+    },
+    {
+      "key": "ownUserId",
+      "value": ""
+    },
+    {
+      "key": "borrowerEmail",
+      "value": "borrower@example.test"
+    },
+    {
+      "key": "borrowerPassword",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Sign in",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('returns a CSRF token and the borrowings permissions', () => {",
+              "  pm.expect(body.csrfToken).to.be.a('string');",
+              "  pm.expect(body.permissions).to.include.members(['borrowings.view', 'borrowings.return']);",
+              "});",
+              "pm.collectionVariables.set('csrfToken', body.csrfToken);",
+              "pm.collectionVariables.set('staffUserId', body.user.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/sign-in",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "sign-in"
+          ],
+          "query": []
+        },
+        "description": "Stores the session cookie (kept by the Postman cookie jar) and the CSRF token."
+      }
+    },
+    {
+      "name": "2. Active borrowings",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const page = pm.response.json();",
+              "pm.test('page envelope with only ACTIVE records', () => {",
+              "  pm.expect(page).to.have.all.keys('items', 'total', 'page', 'pageSize');",
+              "  pm.expect(page.items.every((item) => item.status === 'ACTIVE' && item.returnedAt === null)).to.be.true;",
+              "});",
+              "pm.test('there is a record to return', () => pm.expect(page.items.length).to.be.above(0));",
+              "if (page.items.length) pm.collectionVariables.set('loanId', page.items[0].id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history?status=ACTIVE&sort=dueAt&direction=asc",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "status",
+              "value": "ACTIVE"
+            },
+            {
+              "key": "sort",
+              "value": "dueAt"
+            },
+            {
+              "key": "direction",
+              "value": "asc"
+            }
+          ]
+        },
+        "description": "US-12 list, filtered to assets still out, most urgent due date first. Saves the first record id as {{loanId}}."
+      }
+    },
+    {
+      "name": "3. Return the asset",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const record = pm.response.json();",
+              "pm.test('return time and actor are recorded', () => {",
+              "  pm.expect(record.id).to.eql(pm.collectionVariables.get('loanId'));",
+              "  pm.expect(record.returnedAt).to.be.a('string');",
+              "  pm.expect(record.returnedBy.displayName).to.be.a('string');",
+              "  pm.expect(record.isOverdue).to.be.false;",
+              "});",
+              "pm.collectionVariables.set('assetTag', record.asset.tag);",
+              "pm.test('status is RETURNED, or OVERDUE_RETURNED when after the due date', () => {",
+              "  const late = record.dueAt !== null && Date.parse(record.returnedAt) > Date.parse(record.dueAt);",
+              "  pm.expect(record.status).to.eql(late ? 'OVERDUE_RETURNED' : 'RETURNED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "X-CSRF-Token",
+            "value": "{{csrfToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/{{loanId}}/return",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "{{loanId}}",
+            "return"
+          ],
+          "query": []
+        },
+        "description": "US-11: records the return. The server stamps returnedAt and returnedBy; no body."
+      }
+    },
+    {
+      "name": "4. Return the same record again",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('409 ALREADY_RETURNED', () => {",
+              "  pm.response.to.have.status(409);",
+              "  pm.expect(pm.response.json().error.code).to.eql('ALREADY_RETURNED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "X-CSRF-Token",
+            "value": "{{csrfToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/{{loanId}}/return",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "{{loanId}}",
+            "return"
+          ],
+          "query": []
+        },
+        "description": "A second return must fail without changing anything."
+      }
+    },
+    {
+      "name": "5. Activity log: the return",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const entry = pm.response.json().items[0];",
+              "pm.test('logged as ASSET_RETURNED for that asset, with the user and the time', () => {",
+              "  pm.expect(entry.action).to.eql('ASSET_RETURNED');",
+              "  pm.expect(entry.asset.tag).to.eql(pm.collectionVariables.get('assetTag'));",
+              "  pm.expect(entry.actor.id).to.eql(pm.collectionVariables.get('staffUserId'));",
+              "  pm.expect(Date.parse(entry.occurredAt)).to.be.a('number').and.not.NaN;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/activity?action=ASSET_RETURNED&pageSize=1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activity"
+          ],
+          "query": [
+            {
+              "key": "action",
+              "value": "ASSET_RETURNED"
+            },
+            {
+              "key": "pageSize",
+              "value": "1"
+            }
+          ]
+        },
+        "description": "US-11-T5: the newest ASSET_RETURNED entry is the return above, with who did it and when."
+      }
+    },
+    {
+      "name": "6. Borrowing history (the record just returned)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const page = pm.response.json();",
+              "pm.test('records carry the asset and people details', () => {",
+              "  pm.expect(page.items.length).to.be.above(0);",
+              "  for (const item of page.items) {",
+              "    pm.expect(item).to.include.all.keys('id', 'status', 'isOverdue', 'borrowerName', 'borrowerUserId', 'borrowedAt', 'dueAt', 'returnedAt', 'asset', 'createdBy', 'returnedBy');",
+              "    pm.expect(item.asset).to.include.all.keys('tag', 'name', 'typeName', 'statusName');",
+              "  }",
+              "});",
+              "pm.test('the record returned above is now closed', () => {",
+              "  const returned = page.items.find((item) => item.id === pm.collectionVariables.get('loanId'));",
+              "  pm.expect(returned.status).to.be.oneOf(['RETURNED', 'OVERDUE_RETURNED']);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history?page=1&pageSize=25&sort=borrowedAt&direction=desc&search={{assetTag}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "page",
+              "value": "1"
+            },
+            {
+              "key": "pageSize",
+              "value": "25"
+            },
+            {
+              "key": "sort",
+              "value": "borrowedAt"
+            },
+            {
+              "key": "direction",
+              "value": "desc"
+            },
+            {
+              "key": "search",
+              "value": "{{assetTag}}"
+            }
+          ]
+        },
+        "description": "US-12: records matching the asset tag just returned (search), newest first, joined with the asset and the staff involved."
+      }
+    },
+    {
+      "name": "7. History - returned late only",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('only OVERDUE_RETURNED records', () => {",
+              "  const items = pm.response.json().items;",
+              "  pm.expect(items.every((item) => item.status === 'OVERDUE_RETURNED')).to.be.true;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history?status=OVERDUE_RETURNED",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "status",
+              "value": "OVERDUE_RETURNED"
+            }
+          ]
+        },
+        "description": "Status filter. An empty list is valid when nothing was returned late."
+      }
+    },
+    {
+      "name": "8. History - invalid filter",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('422 VALIDATION_FAILED naming each bad parameter', () => {",
+              "  pm.response.to.have.status(422);",
+              "  const error = pm.response.json().error;",
+              "  pm.expect(error.code).to.eql('VALIDATION_FAILED');",
+              "  pm.expect(error.fields).to.have.all.keys('status', 'pageSize');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history?status=FOO&pageSize=101",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "status",
+              "value": "FOO"
+            },
+            {
+              "key": "pageSize",
+              "value": "101"
+            }
+          ]
+        },
+        "description": "Bad query values are named in one 422."
+      }
+    },
+    {
+      "name": "9. Borrower: sign in",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('a borrower holds only borrowings.viewOwn', () => pm.expect(body.permissions).to.eql(['borrowings.viewOwn']));",
+              "pm.collectionVariables.set('csrfToken', body.csrfToken);",
+              "pm.collectionVariables.set('ownUserId', body.user.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{borrowerEmail}}\",\n  \"password\": \"{{borrowerPassword}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/sign-in",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "sign-in"
+          ],
+          "query": []
+        },
+        "description": "US-12-T4: a user with the Borrower role. Set borrowerEmail and borrowerPassword."
+      }
+    },
+    {
+      "name": "10. Borrower: my history",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const page = pm.response.json();",
+              "pm.test('only my own records', () => {",
+              "  pm.expect(page.items.length).to.be.above(0);",
+              "  pm.expect(page.items.every((item) => item.borrowerUserId === pm.collectionVariables.get('ownUserId'))).to.be.true;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": []
+        },
+        "description": "Only the borrower's own records, with no filter at all."
+      }
+    },
+    {
+      "name": "11. Borrower: another user's history",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => {",
+              "  pm.response.to.have.status(403);",
+              "  const error = pm.response.json().error;",
+              "  pm.expect(error.code).to.eql('FORBIDDEN');",
+              "  pm.expect(error.message).to.eql('You can only view your own borrowing history');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history?borrowerUserId={{staffUserId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "borrowerUserId",
+              "value": "{{staffUserId}}"
+            }
+          ]
+        },
+        "description": "Naming the staff user (their id came from the first sign-in) is refused."
+      }
+    },
+    {
+      "name": "12. Borrower: cannot return an asset",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "X-CSRF-Token",
+            "value": "{{csrfToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/{{loanId}}/return",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "{{loanId}}",
+            "return"
+          ],
+          "query": []
+        },
+        "description": "Returning needs borrowings.return."
+      }
+    },
+    {
+      "name": "13. Borrower: cannot read the activity log",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/activity",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activity"
+          ],
+          "query": []
+        },
+        "description": "The log needs activity.view."
+      }
+    }
+  ]
+}

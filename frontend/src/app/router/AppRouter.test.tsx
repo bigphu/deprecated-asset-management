@@ -58,6 +58,60 @@ describe('AppRouter authentication and authorization', () => {
     expect(await screen.findByRole('heading', { name: "You don't have access" })).toBeInTheDocument()
   })
 
+  it('keeps the borrowings page behind borrowings.view', async () => {
+    server.use(
+      http.get('/api/auth/session', () => HttpResponse.json(sessionFixture(['assets.view']))),
+    )
+
+    renderWithProviders(<AppRouter />, { route: '/borrowings' })
+    expect(await screen.findByRole('heading', { name: "You don't have access" })).toBeInTheDocument()
+  })
+
+  it('opens the borrowings page for a user who may view borrowings', async () => {
+    server.use(
+      http.get('/api/auth/session', () => HttpResponse.json(sessionFixture(['borrowings.view']))),
+      http.get('/api/borrowings/history', () =>
+        HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 25 }),
+      ),
+    )
+
+    renderWithProviders(<AppRouter />, { route: '/borrowings' })
+    expect(await screen.findByRole('heading', { name: 'Borrowings' })).toBeInTheDocument()
+    expect(await screen.findByText('No assets are out on loan')).toBeInTheDocument()
+  })
+
+  it('keeps the activity log behind activity.view', async () => {
+    server.use(
+      http.get('/api/auth/session', () => HttpResponse.json(sessionFixture(['assets.view', 'borrowings.viewOwn']))),
+    )
+
+    renderWithProviders(<AppRouter />, { route: '/activity' })
+    expect(await screen.findByRole('heading', { name: "You don't have access" })).toBeInTheDocument()
+  })
+
+  it('opens the activity log for a user who may read it', async () => {
+    server.use(
+      http.get('/api/auth/session', () => HttpResponse.json(sessionFixture(['activity.view']))),
+      http.get('/api/activity', () => HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 25 })),
+    )
+
+    renderWithProviders(<AppRouter />, { route: '/activity' })
+    expect(await screen.findByRole('heading', { name: 'Activity' })).toBeInTheDocument()
+    expect(await screen.findByText('No activity yet')).toBeInTheDocument()
+  })
+
+  it('lets a borrower open their own borrowings', async () => {
+    server.use(
+      http.get('/api/auth/session', () => HttpResponse.json(sessionFixture(['borrowings.viewOwn']))),
+      http.get('/api/borrowings/history', () =>
+        HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 25 }),
+      ),
+    )
+
+    renderWithProviders(<AppRouter />, { route: '/' })
+    expect(await screen.findByRole('heading', { name: 'My borrowings' })).toBeInTheDocument()
+  })
+
   it('uses the first permitted destination for unknown routes', async () => {
     server.use(http.get('/api/auth/session', () => HttpResponse.json(sessionFixture([]))))
 

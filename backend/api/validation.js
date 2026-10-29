@@ -53,6 +53,8 @@ class Checker {
     if (isBlank(raw)) return required ? this.fail(name, 'Required') : fallback;
     if (typeof raw !== 'string') return this.fail(name, 'Must be a string');
     const value = raw.trim();
+    // Postgres text cannot hold NUL; without this the query fails with a 500 instead of a 422.
+    if (value.includes('\u0000')) return this.fail(name, 'Must not contain null characters');
     if (value.length > max) return this.fail(name, 'Must be at most ' + max + ' characters');
     if (pattern && !pattern.test(value)) return this.fail(name, patternMessage || 'Invalid format');
     return value;

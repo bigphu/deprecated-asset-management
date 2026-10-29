@@ -1,0 +1,72 @@
+.time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.action {
+  font-family: var(--font-mono);
+}
+
+.actor,
+.asset {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.actorName,
+.assetName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--md-body-md-size);
+  line-height: var(--md-body-md-line);
+  letter-spacing: var(--md-body-md-tracking);
+  color: var(--md-on-surface);
+}
+
+.actorId,
+.assetTag {
+  font-family: var(--font-mono);
+  font-size: var(--md-body-sm-size);
+  line-height: var(--md-body-sm-line);
+  letter-spacing: var(--md-body-sm-tracking);
+  color: var(--md-on-surface-variant);
+}
+
+.actorId {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system {
+  color: var(--md-on-surface-variant);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-4) 2px 0;
+  color: var(--md-on-surface-variant);
+  font-size: var(--md-body-sm-size);
+  line-height: var(--md-body-sm-line);
+  letter-spacing: var(--md-body-sm-tracking);
+}
+
+/* The previous page stays on screen while the next loads (keepPreviousData). */
+.fetching tbody {
+  opacity: 0.6;
+  transition: opacity var(--transition-fast);
+}

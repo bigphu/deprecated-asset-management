@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,7 @@ const { loadMigrations, runMigrations } = require('../db/migrate');
 
 const DATABASE = process.env.MIGRATION_TEST_DB_NAME || 'asset_management_migration_test';
 const BOOTSTRAP_DATABASE = process.env.BOOTSTRAP_TEST_DB_NAME || 'asset_management_bootstrap_test';
+const BORROWER_DATABASE = process.env.BORROWER_TEST_DB_NAME || 'asset_management_borrower_role_test';
 
 function connectionFor(database) {
   return {
@@ -63,7 +65,7 @@ test('legacy schemas are baselined, backfilled without changing user ids, and se
   await client.connect();
   try {
     const history = await client.query('SELECT version, checksum FROM fw_schema_migrations ORDER BY version');
-    assert.deepEqual(history.rows.map((row) => row.version), [1, 2, 3, 4, 5]);
+    assert.deepEqual(history.rows.map((row) => row.version), [1, 2, 3, 4, 5, 6, 7]);
     assert.ok(history.rows.every((row) => row.checksum.trim().length === 64));
 
     const users = await client.query(
@@ -141,7 +143,7 @@ test('the advisory-locked migration runner is idempotent under concurrent startu
     runMigrations(connectionFor(DATABASE)),
     runMigrations(connectionFor(DATABASE)),
   ]);
-  assert.deepEqual(results, [5, 5, 5]);
+  assert.deepEqual(results, [7, 7, 7]);
 });
 
 test('the Docker bootstrap schema can be baselined and migrated without recreating US-17 objects', { skip: skip || false }, async () => {
@@ -161,13 +163,13 @@ test('the Docker bootstrap schema can be baselined and migrated without recreati
     await client.query(fs.readFileSync(path.join(initDirectory, '001_schema.sql'), 'utf8'));
     await client.query(fs.readFileSync(path.join(initDirectory, '002_seed.sql'), 'utf8'));
 
-    assert.equal(await runMigrations(connectionFor(BOOTSTRAP_DATABASE)), 5);
+    assert.equal(await runMigrations(connectionFor(BOOTSTRAP_DATABASE)), 7);
 
     const verify = new Client(connectionFor(BOOTSTRAP_DATABASE));
     await verify.connect();
     try {
       const history = await verify.query('SELECT version FROM fw_schema_migrations ORDER BY version');
-      assert.deepEqual(history.rows.map((row) => row.version), [1, 2, 3, 4, 5]);
+      assert.deepEqual(history.rows.map((row) => row.version), [1, 2, 3, 4, 5, 6, 7]);
       const schema = await verify.query(
         `SELECT to_regclass('public.asset_type_attributes') IS NOT NULL AS attributes,
                 EXISTS (
@@ -187,6 +189,64 @@ test('the Docker bootstrap schema can be baselined and migrated without recreati
     await cleanup.connect();
     try {
       await cleanup.query(`DROP DATABASE IF EXISTS ${BOOTSTRAP_DATABASE} WITH (FORCE)`);
+    } finally {
+      await cleanup.end();
+    }
+  }
+});
+
+test('migration 007 survives an existing custom "Borrower" role and leaves the system-role guard enabled', { skip: skip || false }, async () => {
+  const admin = new Client(connectionFor('postgres'));
+  await admin.connect();
+  try {
+    await admin.query(`DROP DATABASE IF EXISTS ${BORROWER_DATABASE} WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE ${BORROWER_DATABASE}`);
+  } finally {
+    await admin.end();
+  }
+
+  // Migrate to 006 only, add the colliding role, then apply the full set.
+  const source = path.join(__dirname, '..', 'db', 'migrations');
+  const upTo006 = fs.mkdtempSync(path.join(os.tmpdir(), 'migrations-to-006-'));
+  try {
+    for (const name of fs.readdirSync(source)) {
+      if (Number.parseInt(name, 10) <= 6) fs.copyFileSync(path.join(source, name), path.join(upTo006, name));
+    }
+    await runMigrations(connectionFor(BORROWER_DATABASE), { directory: upTo006 });
+  } finally {
+    fs.rmSync(upTo006, { recursive: true, force: true });
+  }
+
+  const client = new Client(connectionFor(BORROWER_DATABASE));
+  await client.connect();
+  try {
+    await client.query(
+      `INSERT INTO fw_roles (name, description) VALUES ('Borrower', 'Created by an administrator before the built-in role existed')`,
+    );
+    assert.equal(await runMigrations(connectionFor(BORROWER_DATABASE)), 7);
+
+    const roles = await client.query(
+      `SELECT name::text AS name, system_key FROM fw_roles WHERE name::text ILIKE 'borrower%' ORDER BY name::text`,
+    );
+    assert.deepEqual(roles.rows, [
+      { name: 'Borrower', system_key: null },
+      { name: 'Borrower (built-in)', system_key: 'borrower' },
+    ]);
+    const grants = await client.query(
+      `SELECT array_agg(rp.permission_key ORDER BY rp.permission_key) AS keys
+         FROM fw_roles r JOIN fw_role_permissions rp ON rp.role_id = r.id WHERE r.system_key = 'borrower'`,
+    );
+    assert.deepEqual(grants.rows[0].keys, ['borrowings.viewOwn']);
+    const trigger = await client.query(
+      `SELECT tgenabled FROM pg_trigger WHERE tgname = 'fw_role_permissions_system_immutable'`,
+    );
+    assert.equal(trigger.rows[0].tgenabled, 'O');
+  } finally {
+    await client.end().catch(() => {});
+    const cleanup = new Client(connectionFor('postgres'));
+    await cleanup.connect();
+    try {
+      await cleanup.query(`DROP DATABASE IF EXISTS ${BORROWER_DATABASE} WITH (FORCE)`);
     } finally {
       await cleanup.end();
     }

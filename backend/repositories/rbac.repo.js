@@ -3,6 +3,7 @@ const { ApiError } = require('../api/errors');
 const { validationError } = require('../api/validation');
 const authRepository = require('./auth.repo');
 const { recordSecurityEvent } = require('./securityEvents.repo');
+const { escapeLike } = require('./sql');
 
 const SELECT_ROLE = `
   SELECT r.id,
@@ -174,10 +175,6 @@ async function updateRole(id, input, actor) {
   } catch (err) {
     throw translateRoleNameError(err);
   }
-}
-
-function escapeLike(value) {
-  return value.replace(/[\\%_]/g, '\\$&');
 }
 
 const SELECT_USER = `

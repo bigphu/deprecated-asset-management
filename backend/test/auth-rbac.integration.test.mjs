@@ -145,14 +145,16 @@ describe('US-14 authentication and US-15 RBAC', { skip: skip || false }, () => {
 
   test('migrations seed the exact permission catalogue and immutable built-in role matrix', async () => {
     const migrations = await pool.query('SELECT version, length(checksum) AS checksum_length FROM fw_schema_migrations ORDER BY version');
-    assert.deepEqual(migrations.rows.map((row) => row.version), [1, 2, 3, 4, 5]);
+    assert.deepEqual(migrations.rows.map((row) => row.version), [1, 2, 3, 4, 5, 6, 7]);
     assert.ok(migrations.rows.every((row) => row.checksum_length === 64));
 
     const permissions = await pool.query('SELECT permission_key FROM fw_permissions ORDER BY permission_key');
     assert.deepEqual(
       permissions.rows.map((row) => row.permission_key),
       [
+        'activity.view',
         'assets.archive', 'assets.create', 'assets.restore', 'assets.update', 'assets.view',
+        'borrowings.return', 'borrowings.view', 'borrowings.viewOwn',
         'exportProfiles.create', 'exportProfiles.delete', 'exportProfiles.update', 'exportProfiles.view',
         'exports.run', 'roles.assign', 'roles.create', 'roles.update', 'roles.view', 'users.view',
       ],
@@ -165,9 +167,10 @@ describe('US-14 authentication and US-15 RBAC', { skip: skip || false }, () => {
         GROUP BY r.system_key
         ORDER BY r.system_key`,
     );
-    assert.equal(roles.rows.find((row) => row.system_key === 'admin').permissions.length, 15);
-    assert.equal(roles.rows.find((row) => row.system_key === 'asset_manager').permissions.length, 10);
+    assert.equal(roles.rows.find((row) => row.system_key === 'admin').permissions.length, 19);
+    assert.equal(roles.rows.find((row) => row.system_key === 'asset_manager').permissions.length, 13);
     assert.deepEqual(roles.rows.find((row) => row.system_key === 'viewer').permissions, ['assets.view']);
+    assert.deepEqual(roles.rows.find((row) => row.system_key === 'borrower').permissions, ['borrowings.viewOwn']);
   });
 
   test('provisioning creates no-role accounts by default and refuses a second bootstrap administrator', async () => {
@@ -247,7 +250,7 @@ describe('US-14 authentication and US-15 RBAC', { skip: skip || false }, () => {
     assert.equal(signedIn.status, 200);
     assert.deepEqual(Object.keys(signedIn.body).sort(), ['csrfToken', 'permissions', 'roles', 'session', 'user']);
     assert.equal(signedIn.body.user.id, adminUser.id);
-    assert.equal(signedIn.body.permissions.length, 15);
+    assert.equal(signedIn.body.permissions.length, 19);
     assert.ok(signedIn.body.roles.some((role) => role.systemKey === 'admin'));
     const setCookie = signedIn.headers.get('set-cookie');
     assert.match(setCookie, /^asset_session=[A-Za-z0-9_-]{43};/);
@@ -364,7 +367,7 @@ describe('US-14 authentication and US-15 RBAC', { skip: skip || false }, () => {
   test('access APIs expose no password/session secrets and built-in roles are immutable', async () => {
     const permissions = await adminClient.request('GET', '/permissions');
     assert.equal(permissions.status, 200);
-    assert.equal(permissions.body.length, 15);
+    assert.equal(permissions.body.length, 19);
 
     const users = await adminClient.request('GET', '/users?search=viewer&page=1&pageSize=5');
     assert.equal(users.status, 200);
@@ -416,6 +419,7 @@ describe('US-14 authentication and US-15 RBAC', { skip: skip || false }, () => {
       ['assets.archive', ['assets.archive'], 'assets.view'],
       ['assets.restore', ['assets.restore'], 'assets.view'],
       ['exports.run', ['exports.run'], 'assets.view'],
+      ['borrowings.return', ['borrowings.return'], 'borrowings.view'],
       ['exportProfiles.create', ['exportProfiles.create'], 'exportProfiles.view'],
       ['exportProfiles.update', ['exportProfiles.update'], 'exportProfiles.view'],
       ['exportProfiles.delete', ['exportProfiles.delete'], 'exportProfiles.view'],

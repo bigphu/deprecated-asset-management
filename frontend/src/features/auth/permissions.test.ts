@@ -9,6 +9,13 @@ describe('firstPermittedRoute', () => {
       '/export-profiles',
     )
     expect(firstPermittedRoute(sessionFixture(['users.view']))).toBe('/admin/access')
+    expect(firstPermittedRoute(sessionFixture(['borrowings.view', 'users.view']))).toBe('/borrowings')
+    expect(firstPermittedRoute(sessionFixture(['exportProfiles.view', 'borrowings.view']))).toBe(
+      '/export-profiles',
+    )
+    expect(firstPermittedRoute(sessionFixture(['borrowings.viewOwn']))).toBe('/borrowings')
+    expect(firstPermittedRoute(sessionFixture(['activity.view', 'users.view']))).toBe('/activity')
+    expect(firstPermittedRoute(sessionFixture(['borrowings.viewOwn', 'activity.view']))).toBe('/borrowings')
     expect(firstPermittedRoute(sessionFixture([]))).toBe('/forbidden')
     expect(firstPermittedRoute(null)).toBe('/forbidden')
   })

@@ -22,6 +22,9 @@ const {
   DEFAULT_DATE_FORMAT,
 } = require('./dto/exportParams.dto');
 const { ATTRIBUTE_DATA_TYPES } = require('./dto/assetTypes.dto');
+const borrowingsDto = require('./dto/borrowings.dto');
+const paging = require('./dto/paging');
+const { ACTIONS: ACTIVITY_ACTIONS } = require('./dto/activity.dto');
 
 const ref = (name) => ({ $ref: `#/components/schemas/${name}` });
 const response = (name) => ({ $ref: `#/components/responses/${name}` });
@@ -146,6 +149,8 @@ const spec = {
     { name: 'System', description: 'Health and reference data' },
     { name: 'Asset types', description: 'US17 create asset types' },
     { name: 'Assets', description: 'S-01 create/read/update/delete, S-02 browse' },
+    { name: 'Borrowings', description: 'US-11 return a borrowed asset, US-12 borrowing history' },
+    { name: 'Activity', description: 'US-11-T5 read-only log of what happened to assets' },
     { name: 'Exports', description: 'S-03 Excel export' },
     { name: 'Export profiles', description: 'S-04 saved export settings' },
   ],
@@ -457,6 +462,128 @@ const spec = {
         responses: {
           200: { description: 'The restored asset', content: json(ref('Asset')) },
           404: response('NotFound'),
+          503: response('DatabaseUnavailable'),
+        },
+      },
+    },
+    '/borrowings/history': {
+      get: {
+        tags: ['Borrowings'],
+        summary: 'Borrowing and return history (paged, filtered, sorted)',
+        description:
+          'Every borrowing record, open ones included, joined with its asset and the staff who recorded it ' +
+          '(ADR-0003 offset/limit). `status=ACTIVE` lists the assets still out; `isOverdue` flags those past their ' +
+          'due date. Records of archived assets are kept. Records without a value for the sort column come last. ' +
+          'Needs `borrowings.view` (every record) or `borrowings.viewOwn` (only the caller\'s own records; ' +
+          'naming another user in `borrowerUserId` is a 403).',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, maximum: paging.MAX_PAGE, default: 1 } },
+          {
+            name: 'pageSize',
+            in: 'query',
+            schema: {
+              type: 'integer',
+              minimum: 1,
+              maximum: paging.MAX_PAGE_SIZE,
+              default: paging.DEFAULT_PAGE_SIZE,
+            },
+          },
+          {
+            name: 'sort',
+            in: 'query',
+            description: '`borrower` sorts by borrower name, `asset` by asset tag. Ties break by record id.',
+            schema: { type: 'string', enum: borrowingsDto.SORT_KEYS, default: 'borrowedAt' },
+          },
+          {
+            name: 'direction',
+            in: 'query',
+            schema: { type: 'string', enum: borrowingsDto.SORT_DIRECTIONS, default: 'desc' },
+          },
+          {
+            name: 'status',
+            in: 'query',
+            description: 'Repeat the key to match any of several statuses. Omit it for every record.',
+            schema: {
+              oneOf: [
+                { type: 'string', enum: borrowingsDto.STATUSES },
+                { type: 'array', items: { type: 'string', enum: borrowingsDto.STATUSES } },
+              ],
+            },
+          },
+          {
+            name: 'search',
+            in: 'query',
+            description: 'Case-insensitive text found in the asset tag, asset name or borrower name; `%`, `_` and `\\` match literally.',
+            schema: { type: 'string', maxLength: 100 },
+          },
+          {
+            name: 'borrowerUserId',
+            in: 'query',
+            description:
+              'Only the records of this user. Staff with `borrowings.view` may name anyone; a borrower may only name ' +
+              'themselves (or nobody: the list is always limited to their own records).',
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          200: { description: 'One page of borrowing records', content: json(ref('BorrowingPage')) },
+          422: response('ValidationFailed'),
+          503: response('DatabaseUnavailable'),
+        },
+      },
+    },
+    '/borrowings/{id}/return': {
+      parameters: [{ $ref: '#/components/parameters/BorrowingId' }],
+      post: {
+        tags: ['Borrowings'],
+        summary: 'Return a borrowed asset',
+        description:
+          'Stamps `returnedAt` with the server clock and `returnedBy` with the caller, so `status` becomes ' +
+          '`RETURNED` (or `OVERDUE_RETURNED` when after `dueAt`). In the same transaction an `ON_LOAN` asset becomes ' +
+          '`AVAILABLE` (any other asset status is left alone) and a `returned` event is added to the asset timeline. ' +
+          'No request body.',
+        responses: {
+          200: { description: 'The updated record', content: json(ref('Borrowing')) },
+          404: response('NotFound'),
+          409: {
+            description: 'The record was already returned (`ALREADY_RETURNED`); nothing is changed',
+            content: json(ref('Error'), {
+              error: { code: 'ALREADY_RETURNED', message: 'This asset has already been returned' },
+            }),
+          },
+          503: response('DatabaseUnavailable'),
+        },
+      },
+    },
+    '/activity': {
+      get: {
+        tags: ['Activity'],
+        summary: 'Activity log (paged, newest first)',
+        description:
+          'The asset timeline written by every create, update, archive, restore and return, with who did it ' +
+          'and when (ADR-0003 offset/limit). Archived assets are included. Actors appear by display name only.',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, maximum: paging.MAX_PAGE, default: 1 } },
+          {
+            name: 'pageSize',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, maximum: paging.MAX_PAGE_SIZE, default: paging.DEFAULT_PAGE_SIZE },
+          },
+          {
+            name: 'action',
+            in: 'query',
+            description: 'Repeat the key to match any of several actions. Omit it for every action.',
+            schema: {
+              oneOf: [
+                { type: 'string', enum: ACTIVITY_ACTIONS },
+                { type: 'array', items: { type: 'string', enum: ACTIVITY_ACTIONS } },
+              ],
+            },
+          },
+        ],
+        responses: {
+          200: { description: 'One page of activity entries', content: json(ref('ActivityPage')) },
+          422: response('ValidationFailed'),
           503: response('DatabaseUnavailable'),
         },
       },
@@ -988,6 +1115,7 @@ Object.assign(spec.paths, {
 });
 
 Object.assign(spec.components.parameters, {
+  BorrowingId: { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
   RoleId: { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
   UserId: { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
   CsrfToken: {
@@ -1027,7 +1155,94 @@ Object.assign(spec.components.responses, {
   },
 });
 
+const borrowingPerson = {
+  type: ['object', 'null'],
+  required: ['id', 'displayName'],
+  properties: { id: { type: 'string', format: 'uuid' }, displayName: { type: 'string' } },
+  description: 'Staff member, by display name only.',
+};
+
 Object.assign(spec.components.schemas, {
+  Borrowing: {
+    type: 'object',
+    required: [
+      'id', 'status', 'isOverdue', 'borrowerName', 'borrowerUserId', 'borrowedAt', 'dueAt', 'returnedAt', 'note',
+      'asset', 'createdBy', 'returnedBy',
+    ],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      status: {
+        type: 'string',
+        enum: borrowingsDto.STATUSES,
+        description:
+          'Derived by the database from `returnedAt` and `dueAt`: `ACTIVE` while not returned, `OVERDUE_RETURNED` ' +
+          'when returned after the due date, otherwise `RETURNED`.',
+      },
+      isOverdue: { type: 'boolean', description: 'Not returned and past `dueAt`. Always false once returned.' },
+      borrowerName: { type: 'string' },
+      borrowerUserId: {
+        type: ['string', 'null'],
+        format: 'uuid',
+        description: 'The borrower\'s user account, when they have one. Records with only a name are visible to staff only.',
+      },
+      borrowedAt: { type: 'string', format: 'date-time' },
+      dueAt: { type: ['string', 'null'], format: 'date-time' },
+      returnedAt: { type: ['string', 'null'], format: 'date-time' },
+      note: { type: ['string', 'null'] },
+      asset: {
+        type: 'object',
+        required: ['id', 'tag', 'name', 'type', 'typeName', 'status', 'statusName', 'archived'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          tag: { type: 'string' },
+          name: { type: 'string' },
+          type: { type: 'string', description: 'Asset type code' },
+          typeName: { type: 'string' },
+          status: { type: 'string', description: 'Asset status code' },
+          statusName: { type: 'string' },
+          archived: { type: 'boolean', description: 'The asset is soft-deleted (ADR-0002); its history is kept.' },
+        },
+      },
+      createdBy: { ...borrowingPerson, description: 'Who recorded the borrowing.' },
+      returnedBy: { ...borrowingPerson, description: 'Who recorded the return; null while not returned.' },
+    },
+  },
+  ActivityEntry: {
+    type: 'object',
+    required: ['id', 'action', 'occurredAt', 'description', 'actor', 'asset'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      action: { type: 'string', enum: ACTIVITY_ACTIONS, examples: ['ASSET_RETURNED'] },
+      occurredAt: { type: 'string', format: 'date-time' },
+      description: { type: 'string', examples: ['Asset LAP-1002 returned'] },
+      actor: { ...borrowingPerson, description: 'Who made the change; null for a system event.' },
+      asset: {
+        type: 'object',
+        required: ['id', 'tag', 'name'],
+        properties: { id: { type: 'string', format: 'uuid' }, tag: { type: 'string' }, name: { type: 'string' } },
+      },
+    },
+  },
+  ActivityPage: {
+    type: 'object',
+    required: ['items', 'total', 'page', 'pageSize'],
+    properties: {
+      items: { type: 'array', items: ref('ActivityEntry') },
+      total: { type: 'integer', minimum: 0, description: 'Matches across all pages' },
+      page: { type: 'integer', minimum: 1 },
+      pageSize: { type: 'integer', minimum: 1, maximum: paging.MAX_PAGE_SIZE },
+    },
+  },
+  BorrowingPage: {
+    type: 'object',
+    required: ['items', 'total', 'page', 'pageSize'],
+    properties: {
+      items: { type: 'array', items: ref('Borrowing') },
+      total: { type: 'integer', minimum: 0, description: 'Matches across all pages' },
+      page: { type: 'integer', minimum: 1 },
+      pageSize: { type: 'integer', minimum: 1, maximum: paging.MAX_PAGE_SIZE },
+    },
+  },
   SignInRequest: {
     type: 'object',
     additionalProperties: false,
@@ -1052,7 +1267,7 @@ Object.assign(spec.components.schemas, {
     properties: {
       id: { type: 'string', format: 'uuid' },
       name: { type: 'string' },
-      systemKey: { type: ['string', 'null'], enum: ['admin', 'asset_manager', 'viewer', null] },
+      systemKey: { type: ['string', 'null'], enum: ['admin', 'asset_manager', 'viewer', 'borrower', null] },
     },
   },
   AuthSession: {
@@ -1086,7 +1301,7 @@ Object.assign(spec.components.schemas, {
       id: { type: 'string', format: 'uuid' },
       name: { type: 'string' },
       description: { type: ['string', 'null'] },
-      systemKey: { type: ['string', 'null'], enum: ['admin', 'asset_manager', 'viewer', null] },
+      systemKey: { type: ['string', 'null'], enum: ['admin', 'asset_manager', 'viewer', 'borrower', null] },
       isActive: { type: 'boolean' },
       permissionKeys: { type: 'array', items: { type: 'string' }, uniqueItems: true },
       assignedUserCount: { type: 'integer', minimum: 0 },
@@ -1181,6 +1396,8 @@ const requiredPermissions = {
   'PUT /assets/{id}': ['assets.update'],
   'DELETE /assets/{id}': ['assets.archive'],
   'POST /assets/{id}/restore': ['assets.restore'],
+  'POST /borrowings/{id}/return': ['borrowings.return'],
+  'GET /activity': ['activity.view'],
   'POST /exports/assets': ['assets.view', 'exports.run'],
   'GET /export-profiles': ['exportProfiles.view'],
   'POST /export-profiles': ['exportProfiles.create'],
@@ -1189,12 +1406,19 @@ const requiredPermissions = {
   'DELETE /export-profiles/{id}': ['exportProfiles.delete'],
 };
 
+// Any ONE of these is enough (the handler then decides what each allows), unlike x-required-permissions.
+const requiredAnyPermissions = {
+  'GET /borrowings/history': ['borrowings.view', 'borrowings.viewOwn'],
+};
+
 for (const [path, item] of Object.entries(spec.paths)) {
   for (const method of ['get', 'post', 'put', 'delete', 'patch']) {
     const operation = item[method];
     if (!operation) continue;
     const permissionKeys = requiredPermissions[`${method.toUpperCase()} ${path}`];
     if (permissionKeys) operation['x-required-permissions'] = permissionKeys;
+    const anyOf = requiredAnyPermissions[`${method.toUpperCase()} ${path}`];
+    if (anyOf) operation['x-required-permissions-any'] = anyOf;
     if (operation.security && operation.security.length === 0) continue;
     operation.responses[401] = operation.responses[401] || response('Unauthenticated');
     operation.responses[403] = operation.responses[403] || response('Forbidden');

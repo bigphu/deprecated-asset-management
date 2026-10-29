@@ -83,6 +83,8 @@ test('every permission-protected operation declares its policy', () => {
     'POST /asset-types/{code}/attributes/{key}/restore',
     'GET /assets', 'POST /assets', 'GET /assets/{id}', 'PUT /assets/{id}', 'DELETE /assets/{id}',
     'POST /assets/{id}/restore', 'POST /exports/assets',
+    'GET /borrowings/history', 'POST /borrowings/{id}/return',
+    'GET /activity',
     'GET /export-profiles', 'POST /export-profiles', 'GET /export-profiles/{id}',
     'PUT /export-profiles/{id}', 'DELETE /export-profiles/{id}',
     'GET /permissions', 'GET /roles', 'POST /roles', 'GET /roles/{id}', 'PUT /roles/{id}',
@@ -91,7 +93,10 @@ test('every permission-protected operation declares its policy', () => {
   const actual = new Set();
   for (const [path, item] of Object.entries(spec.paths)) {
     for (const method of METHODS) {
-      if (item[method] && item[method]['x-required-permissions']) actual.add(`${method.toUpperCase()} ${path}`);
+      const operation = item[method];
+      if (operation && (operation['x-required-permissions'] || operation['x-required-permissions-any'])) {
+        actual.add(`${method.toUpperCase()} ${path}`);
+      }
     }
   }
   assert.deepEqual([...actual].sort(), [...expected].sort());

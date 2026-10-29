@@ -1,0 +1,84 @@
+/* The asset cell is the way into the record details, so it is a real button. */
+.assetButton {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.assetName {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--md-body-md-size);
+  line-height: var(--md-body-md-line);
+  letter-spacing: var(--md-body-md-tracking);
+  color: var(--md-on-surface);
+}
+
+.assetButton:hover .assetName {
+  color: var(--md-primary);
+  text-decoration: underline;
+}
+
+.assetTag {
+  font-family: var(--font-mono);
+  font-size: var(--md-body-sm-size);
+  line-height: var(--md-body-sm-line);
+  letter-spacing: var(--md-body-sm-tracking);
+  color: var(--md-on-surface-variant);
+}
+
+.ellipsis {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Timestamps only line up with tabular figures. */
+.date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.overdue {
+  composes: date;
+  color: var(--md-error);
+  font-weight: 600;
+}
+
+.actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-4) 2px 0;
+  color: var(--md-on-surface-variant);
+  font-size: var(--md-body-sm-size);
+  line-height: var(--md-body-sm-line);
+  letter-spacing: var(--md-body-sm-tracking);
+}
+
+/* The previous page stays on screen while the next loads (keepPreviousData);
+   dimming it says the rows are about to change. */
+.fetching tbody {
+  opacity: 0.6;
+  transition: opacity var(--transition-fast);
+}
