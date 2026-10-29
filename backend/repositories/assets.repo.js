@@ -11,6 +11,7 @@ const { ApiError } = require('../api/errors');
 const { validationError } = require('../api/validation');
 const { validateExtendedAttributes } = require('../api/attributeValues');
 const { resolveAssetCodes } = require('./referenceData.repo');
+const { REPLACEMENT_RULES } = require('../api/dto/assets.dto');
 
 const SELECT_ASSET = `
   SELECT a.id,
@@ -136,6 +137,15 @@ async function listAssetEvents(assetId) {
   return rows;
 }
 
+/**
+ * Row-locks assets in id order, so two transactions locking the same pair cannot deadlock. Locks only, no joins:
+ * after waiting, Postgres re-checks a locked row against the query's joins, so a status change by the transaction
+ * we waited for would drop the row and a lookup through SELECT_ASSET would report it as not found. Read after this.
+ */
+function lockAssets(client, ids) {
+  return client.query('SELECT 1 FROM assets WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids]);
+}
+
 function assetNotFound() {
   return new ApiError(404, 'NOT_FOUND', 'Asset not found');
 }
@@ -191,7 +201,13 @@ function isUniqueViolation(err, constraint) {
   return err.code === '23505' && err.constraint === constraint;
 }
 
+/** BR-05: only replaceAsset sets REPLACED, and nothing clears it, so the relationship and status agree. */
+function rejectReplacedStatus() {
+  return validationError({ status: 'The Replaced status is set only by recording a replacement' });
+}
+
 async function createAsset(input, userId) {
+  if (input.status === REPLACEMENT_RULES.oldAssetResultStatus) throw rejectReplacedStatus();
   try {
     return await db.withTransaction(async (client) => {
       const ids = await resolveCodesOrThrow(client, input);
@@ -236,13 +252,8 @@ const TRACKED_FIELDS = [
  */
 async function updateAsset(id, input, userId) {
   return db.withTransaction(async (client) => {
-    const { rows } = await client.query(
-      `${SELECT_ASSET}
-        WHERE a.id = $1 AND a.deleted_at IS NULL
-          FOR UPDATE OF a`,
-      [id],
-    );
-    const current = rows[0];
+    await lockAssets(client, [id]);
+    const current = await findAsset(id, client);
     if (!current) throw assetNotFound();
 
     // The schema makes asset_tag immutable (trigger); say so per field rather
@@ -250,6 +261,8 @@ async function updateAsset(id, input, userId) {
     if (input.tag !== undefined && input.tag.toLowerCase() !== current.tag.toLowerCase()) {
       throw validationError({ tag: 'The asset tag cannot be changed once created' });
     }
+    const replaced = REPLACEMENT_RULES.oldAssetResultStatus;
+    if ((input.status === replaced) !== (current.status === replaced)) throw rejectReplacedStatus();
 
     const ids = await resolveCodesOrThrow(client, input, {
       typeId: current.asset_type_id,
@@ -323,6 +336,68 @@ async function restoreAsset(id, userId) {
   });
 }
 
+/**
+ * US-13: records that `input.replacementAssetId` replaces `oldId`. Both assets
+ * stay locked until commit, so a concurrent edit, borrow or second replacement
+ * of either one waits and then sees the new state.
+ */
+async function replaceAsset(pathId, input, userId) {
+  const oldId = pathId.toLowerCase(); // ids are compared as strings below; pg returns lower case
+  if (input.replacementAssetId === oldId) {
+    throw validationError({ replacementAssetId: 'An asset cannot replace itself' });
+  }
+  return db.withTransaction(async (client) => {
+    await lockAssets(client, [oldId, input.replacementAssetId]);
+    const { rows } = await client.query(
+      `${SELECT_ASSET} WHERE a.id = ANY($1::uuid[]) AND a.deleted_at IS NULL`,
+      [[oldId, input.replacementAssetId]],
+    );
+    const old = rows.find((row) => row.id === oldId);
+    const replacement = rows.find((row) => row.id === input.replacementAssetId);
+    if (!old) throw assetNotFound();
+    if (!replacement) throw validationError({ replacementAssetId: 'No such asset' });
+
+    const errors = {};
+    if (!REPLACEMENT_RULES.oldAssetStatuses.includes(old.status)) {
+      errors.asset = `${old.tag} cannot be replaced while its status is ${old.status_name}`;
+    }
+    if (!REPLACEMENT_RULES.newAssetStatuses.includes(replacement.status)) {
+      errors.replacementAssetId =
+        `${replacement.tag} cannot be used as a replacement while its status is ${replacement.status_name}`;
+    }
+    if (Object.keys(errors).length) throw validationError(errors);
+
+    const { rows: saved } = await client.query(
+      `INSERT INTO asset_replacements (old_asset_id, new_asset_id, replaced_on, reason, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, old_asset_id, new_asset_id, replaced_on, reason, created_at`,
+      [oldId, replacement.id, input.replacedOn, input.reason, userId],
+    );
+
+    // US13-T5: the old asset's lifecycle status and both histories, in the same transaction.
+    await client.query(
+      `UPDATE assets
+          SET asset_status_id = (SELECT id FROM asset_statuses WHERE code = $2),
+              updated_by_user_id = $3
+        WHERE id = $1`,
+      [oldId, REPLACEMENT_RULES.oldAssetResultStatus, userId],
+    );
+    const details = {
+      replacementId: saved[0].id,
+      oldAssetId: oldId,
+      newAssetId: replacement.id,
+      replacedOn: input.replacedOn,
+      reason: input.reason,
+      previousStatus: old.status,
+    };
+    await recordEvent(client, oldId, 'replaced', userId, `Asset ${old.tag} replaced by ${replacement.tag}`, details);
+    await recordEvent(
+      client, replacement.id, 'replaced', userId, `Asset ${replacement.tag} replaces ${old.tag}`, details,
+    );
+    return saved[0];
+  });
+}
+
 module.exports = {
   listAssets,
   listAllAssets,
@@ -332,4 +407,5 @@ module.exports = {
   updateAsset,
   softDeleteAsset,
   restoreAsset,
+  replaceAsset,
 };

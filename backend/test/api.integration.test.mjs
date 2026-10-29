@@ -1144,6 +1144,171 @@ describe('asset management API', { skip: skip || false }, () => {
     });
   });
 
+  describe('US-13 asset replacement', () => {
+    const ids = {};
+    const replace = (oldId, body) => api('POST', `/assets/${oldId}/replacement`, body);
+    const valid = (replacementAssetId) => ({ replacementAssetId, replacedOn: '2026-10-20', reason: 'Screen broken' });
+    const eventCount = async (id) => (await api('GET', `/assets/${id}/events`)).body.items.length;
+
+    /**
+     * Holds a row lock on `assetId` while `start()` sends requests, and releases it once Postgres reports
+     * `waiting` of them blocked on a lock. The overlap is certain; only the order they then run in is left to chance.
+     */
+    async function raceBehindLock(assetId, start, waiting = 2) {
+      const blocker = await pool.connect();
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query('SELECT 1 FROM assets WHERE id = $1 FOR UPDATE', [assetId]);
+        const racing = start();
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const { rows } = await pool.query(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+              WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+          );
+          if (rows[0].n >= waiting) break;
+          assert.ok(Date.now() < deadline, `expected ${waiting} requests waiting on the lock, saw ${rows[0].n}`);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        await blocker.query('COMMIT');
+        return await Promise.all(racing);
+      } finally {
+        await blocker.query('ROLLBACK').catch(() => {});
+        blocker.release();
+      }
+    }
+
+    before(async () => {
+      for (const [key, status] of [['old', 'AVAILABLE'], ['new', 'AVAILABLE'], ['loaned', 'ON_LOAN'], ['retired', 'RETIRED']]) {
+        const res = await api('POST', '/assets', asset('REPL-' + key.toUpperCase(), { status }));
+        assert.equal(res.status, 201, JSON.stringify(res.body));
+        ids[key] = res.body.id;
+      }
+    });
+
+    test('AC2: rejects the same asset, and an unknown or deleted replacement, saving nothing', async () => {
+      for (const [path, body] of [[ids.old, ids.old], [ids.old.toUpperCase(), ids.old]]) {
+        const same = await replace(path, valid(body));
+        assert.equal(same.status, 422);
+        assert.equal(same.body.error.code, 'VALIDATION_FAILED');
+        assert.match(same.body.error.fields.replacementAssetId, /itself/);
+      }
+
+      const unknown = await replace(ids.old, valid('00000000-0000-4000-8000-000000000000'));
+      assert.equal(unknown.status, 422);
+      assert.equal(unknown.body.error.fields.replacementAssetId, 'No such asset');
+
+      const gone = (await api('POST', '/assets', asset('REPL-GONE'))).body.id;
+      assert.equal((await api('DELETE', '/assets/' + gone)).status, 204);
+      assert.equal((await replace(ids.old, valid(gone))).status, 422);
+
+      assert.equal((await replace('00000000-0000-4000-8000-000000000000', valid(ids.new))).status, 404);
+      const saved = await pool.query('SELECT count(*)::int AS n FROM asset_replacements WHERE old_asset_id = $1', [ids.old]);
+      assert.equal(saved.rows[0].n, 0);
+    });
+
+    test('rejects a malformed body with per-field messages', async () => {
+      const res = await replace(ids.old, { replacementAssetId: 'nope', replacedOn: '2026-02-30', reason: ' ', extra: 1 });
+      assert.equal(res.status, 422);
+      assert.deepEqual(Object.keys(res.body.error.fields).sort(), ['extra', 'reason', 'replacedOn', 'replacementAssetId']);
+    });
+
+    test('AC3: rejects an ineligible replacement or old asset without saving or logging anything', async () => {
+      const before = await eventCount(ids.old);
+      const busy = await replace(ids.old, valid(ids.loaned));
+      assert.equal(busy.status, 422);
+      assert.match(busy.body.error.fields.replacementAssetId, /REPL-LOANED cannot be used as a replacement/);
+
+      const retired = await replace(ids.retired, valid(ids.new));
+      assert.equal(retired.status, 422);
+      assert.match(retired.body.error.fields.asset, /REPL-RETIRED cannot be replaced/);
+
+      assert.equal(await eventCount(ids.old), before);
+      assert.equal((await api('GET', '/assets/' + ids.retired)).body.status, 'RETIRED');
+      const saved = await pool.query('SELECT count(*)::int AS n FROM asset_replacements');
+      assert.equal(saved.rows[0].n, 0);
+    });
+
+    test('AC4, AC5, AC7: saves the relationship, marks the old asset Replaced and logs both assets', async () => {
+      const res = await replace(ids.old, valid(ids.new.toUpperCase()));
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      assert.equal(res.body.oldAssetId, ids.old);
+      assert.equal(res.body.newAssetId, ids.new);
+      assert.equal(res.body.replacedOn, '2026-10-20');
+      assert.equal(res.body.reason, 'Screen broken');
+
+      assert.equal((await api('GET', '/assets/' + ids.old)).body.status, 'REPLACED');
+      assert.equal((await api('GET', '/assets/' + ids.new)).body.status, 'AVAILABLE');
+
+      for (const [id, text] of [[ids.old, 'REPL-OLD replaced by REPL-NEW'], [ids.new, 'REPL-NEW replaces REPL-OLD']]) {
+        const events = (await api('GET', `/assets/${id}/events`)).body.items;
+        const last = events.at(-1);
+        assert.equal(last.type, 'replaced');
+        assert.equal(last.actor.displayName, 'Integration Admin');
+        assert.match(last.description, new RegExp(text));
+        assert.equal(last.details.replacementId, res.body.id);
+        assert.equal(last.details.reason, 'Screen broken');
+        assert.equal(last.details.previousStatus, 'AVAILABLE');
+      }
+    });
+
+    test('AC5: a replaced asset cannot be replaced again, nor leave or enter Replaced by an edit', async () => {
+      const again = await replace(ids.old, valid(ids.new));
+      assert.equal(again.status, 422);
+      assert.match(again.body.error.fields.asset, /cannot be replaced/);
+
+      const unreplace = await api('PUT', '/assets/' + ids.old, asset('REPL-OLD', { status: 'AVAILABLE' }));
+      assert.equal(unreplace.status, 422);
+      assert.match(unreplace.body.error.fields.status, /only by recording a replacement/);
+      // Other edits of a replaced asset still work.
+      assert.equal((await api('PUT', '/assets/' + ids.old, asset('REPL-OLD', { status: 'REPLACED', name: 'Old one' }))).status, 200);
+
+      assert.equal((await api('PUT', '/assets/' + ids.new, asset('REPL-NEW', { status: 'REPLACED' }))).status, 422);
+      assert.equal((await api('POST', '/assets', asset('REPL-DIRECT', { status: 'REPLACED' }))).status, 422);
+    });
+
+    test('two simultaneous replacements of one asset: one 201, one 422, one relationship, one event pair', async () => {
+      const make = async (tag) => (await api('POST', '/assets', asset(tag))).body.id;
+      const oldId = await make('RACE-OLD');
+      const newIds = [await make('RACE-NEW-A'), await make('RACE-NEW-B')];
+
+      const results = await raceBehindLock(oldId, () => newIds.map((id) => replace(oldId, valid(id))));
+
+      assert.deepEqual(results.map((r) => r.status).sort(), [201, 422]);
+      const winner = results.find((r) => r.status === 201).body;
+      const loser = results.find((r) => r.status === 422).body;
+      assert.match(loser.error.fields.asset, /RACE-OLD cannot be replaced/);
+
+      const saved = await pool.query('SELECT new_asset_id FROM asset_replacements WHERE old_asset_id = $1', [oldId]);
+      assert.deepEqual(saved.rows.map((r) => r.new_asset_id), [winner.newAssetId]);
+      const events = await pool.query(
+        `SELECT asset_id, count(*)::int AS n FROM asset_events
+          WHERE event_type = 'replaced' AND asset_id = ANY($1::uuid[]) GROUP BY asset_id`,
+        [[oldId, ...newIds]],
+      );
+      assert.deepEqual(
+        Object.fromEntries(events.rows.map((r) => [r.asset_id, r.n])),
+        { [oldId]: 1, [winner.newAssetId]: 1 },
+      );
+      assert.equal((await api('GET', '/assets/' + oldId)).body.status, 'REPLACED');
+    });
+
+    test('an edit queued behind a replacement is answered for the new state, never 404', async () => {
+      const oldId = (await api('POST', '/assets', asset('RACE-EDIT-OLD'))).body.id;
+      const newId = (await api('POST', '/assets', asset('RACE-EDIT-NEW'))).body.id;
+
+      const [replaced, edit] = await raceBehindLock(oldId, () => [
+        replace(oldId, valid(newId)),
+        api('PUT', '/assets/' + oldId, asset('RACE-EDIT-OLD', { name: 'Renamed while queued' })),
+      ]);
+
+      assert.equal(replaced.status, 201, JSON.stringify(replaced.body));
+      // Either order is valid: the edit ran first (200), or it ran after the replacement and was refused
+      // because an edit may not take an asset out of REPLACED (422).
+      assert.ok([200, 422].includes(edit.status), `edit answered ${edit.status} ${JSON.stringify(edit.body)}`);
+    });
+  });
+
   test('unknown API routes answer in JSON', async () => {
     const res = await api('GET', '/nope');
     assert.equal(res.status, 404);

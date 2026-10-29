@@ -5,6 +5,7 @@
  */
 
 const { checkBody, checkQuery } = require('../validation');
+const { UUID } = require('../errors');
 
 const ASSET_FIELDS = ['tag', 'name', 'type', 'status', 'location', 'purchaseDate', 'notes', 'extendedAttributes'];
 
@@ -117,6 +118,43 @@ function toAssetDto(row) {
   };
 }
 
+/**
+ * US13-T1 replacement lifecycle rules, kept here only. Not yet agreed by the
+ * team (Sprint 3 plan §1.10 Q2); the PR lists them under "Assumptions to confirm".
+ * The repo has no Broken or Maintenance status yet, so only AVAILABLE old assets qualify.
+ */
+const REPLACEMENT_RULES = Object.freeze({
+  oldAssetStatuses: Object.freeze(['AVAILABLE']),
+  newAssetStatuses: Object.freeze(['AVAILABLE']),
+  oldAssetResultStatus: 'REPLACED',
+});
+
+/** POST /api/assets/:id/replacement body (US13-T4); the asset at :id is the old one. */
+function parseReplacement(body) {
+  const c = checkBody(body, ['replacementAssetId', 'replacedOn', 'reason']);
+  const replacementAssetId = c.string('replacementAssetId', {
+    max: 36,
+    pattern: UUID,
+    patternMessage: 'Must be an asset id',
+  });
+  return c.done({
+    replacementAssetId: replacementAssetId && replacementAssetId.toLowerCase(),
+    replacedOn: c.date('replacedOn'),
+    reason: c.string('reason', { max: 2000 }),
+  });
+}
+
+function toReplacementDto(row) {
+  return {
+    id: row.id,
+    oldAssetId: row.old_asset_id,
+    newAssetId: row.new_asset_id,
+    replacedOn: row.replaced_on,
+    reason: row.reason,
+    createdAt: row.created_at,
+  };
+}
+
 /** One activity-history entry (US16-AC3): action, acting user and timestamp. */
 function toAssetEventDto(row) {
   return {
@@ -136,11 +174,14 @@ module.exports = {
   DEFAULT_PAGE_SIZE,
   SORT_DIRECTIONS,
   MAX_PAGE_SIZE,
+  REPLACEMENT_RULES,
   parseCreateAsset,
   parseUpdateAsset,
   parseListQuery,
+  parseReplacement,
   readFilters,
   readSort,
   toAssetDto,
   toAssetEventDto,
+  toReplacementDto,
 };
