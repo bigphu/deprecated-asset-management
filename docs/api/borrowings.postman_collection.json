@@ -2,7 +2,7 @@
   "info": {
     "name": "Asset Management - Borrowings (US-11 return, US-12 history)",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Run the requests in order. \"Sign in\" stores the CSRF token; \"Active borrowings\" picks a record to return. Set `email`, `password` and, if the API is not on localhost:3000 with the Vite origin, `baseUrl`/`origin` (`origin` must be one of the API's ALLOWED_ORIGINS). The user needs `borrowings.view` and `borrowings.return` (Admin or Asset Manager). Prerequisite: at least one open borrowing. There is no checkout endpoint yet, so load demo records with docs/api/borrowings-demo-seed.sql. Each run returns one open borrowing, so reload the data to run again."
+    "description": "Run the requests in order. \"Sign in\" stores the CSRF token; \"Active borrowings\" picks a record to return. Set `email`, `password` and, if the API is not on localhost:3000 with the Vite origin, `baseUrl`/`origin` (`origin` must be one of the API's ALLOWED_ORIGINS). The user needs `borrowings.view`, `borrowings.return` and `activity.view` (Admin or Asset Manager). The last requests sign in as a Borrower (`borrowerEmail`, `borrowerPassword`) and show that they only see their own history. Prerequisite: open borrowings linked to those accounts. There is no checkout endpoint yet, so load demo records with docs/api/borrowings-demo-seed.sql. Each run returns one open borrowing, so reload the data to run again."
   },
   "variable": [
     {
@@ -32,6 +32,22 @@
     {
       "key": "assetTag",
       "value": ""
+    },
+    {
+      "key": "staffUserId",
+      "value": ""
+    },
+    {
+      "key": "ownUserId",
+      "value": ""
+    },
+    {
+      "key": "borrowerEmail",
+      "value": "borrower@example.test"
+    },
+    {
+      "key": "borrowerPassword",
+      "value": ""
     }
   ],
   "item": [
@@ -49,7 +65,8 @@
               "  pm.expect(body.csrfToken).to.be.a('string');",
               "  pm.expect(body.permissions).to.include.members(['borrowings.view', 'borrowings.return']);",
               "});",
-              "pm.collectionVariables.set('csrfToken', body.csrfToken);"
+              "pm.collectionVariables.set('csrfToken', body.csrfToken);",
+              "pm.collectionVariables.set('staffUserId', body.user.id);"
             ]
           }
         }
@@ -239,7 +256,53 @@
       }
     },
     {
-      "name": "5. Borrowing history (all records)",
+      "name": "5. Activity log: the return",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const entry = pm.response.json().items[0];",
+              "pm.test('logged as ASSET_RETURNED for that asset, with the user and the time', () => {",
+              "  pm.expect(entry.action).to.eql('ASSET_RETURNED');",
+              "  pm.expect(entry.asset.tag).to.eql(pm.collectionVariables.get('assetTag'));",
+              "  pm.expect(entry.actor.id).to.eql(pm.collectionVariables.get('staffUserId'));",
+              "  pm.expect(Date.parse(entry.occurredAt)).to.be.a('number').and.not.NaN;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/activity?action=ASSET_RETURNED&pageSize=1",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activity"
+          ],
+          "query": [
+            {
+              "key": "action",
+              "value": "ASSET_RETURNED"
+            },
+            {
+              "key": "pageSize",
+              "value": "1"
+            }
+          ]
+        },
+        "description": "US-11-T5: the newest ASSET_RETURNED entry is the return above, with who did it and when."
+      }
+    },
+    {
+      "name": "6. Borrowing history (the record just returned)",
       "event": [
         {
           "listen": "test",
@@ -251,7 +314,7 @@
               "pm.test('records carry the asset and people details', () => {",
               "  pm.expect(page.items.length).to.be.above(0);",
               "  for (const item of page.items) {",
-              "    pm.expect(item).to.include.all.keys('id', 'status', 'isOverdue', 'borrowerName', 'borrowedAt', 'dueAt', 'returnedAt', 'asset', 'createdBy', 'returnedBy');",
+              "    pm.expect(item).to.include.all.keys('id', 'status', 'isOverdue', 'borrowerName', 'borrowerUserId', 'borrowedAt', 'dueAt', 'returnedAt', 'asset', 'createdBy', 'returnedBy');",
               "    pm.expect(item.asset).to.include.all.keys('tag', 'name', 'typeName', 'statusName');",
               "  }",
               "});",
@@ -303,7 +366,7 @@
       }
     },
     {
-      "name": "6. History - returned late only",
+      "name": "7. History - returned late only",
       "event": [
         {
           "listen": "test",
@@ -343,7 +406,7 @@
       }
     },
     {
-      "name": "7. History - invalid filter",
+      "name": "8. History - invalid filter",
       "event": [
         {
           "listen": "test",
@@ -385,6 +448,207 @@
           ]
         },
         "description": "Bad query values are named in one 422."
+      }
+    },
+    {
+      "name": "9. Borrower: sign in",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('a borrower holds only borrowings.viewOwn', () => pm.expect(body.permissions).to.eql(['borrowings.viewOwn']));",
+              "pm.collectionVariables.set('csrfToken', body.csrfToken);",
+              "pm.collectionVariables.set('ownUserId', body.user.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{borrowerEmail}}\",\n  \"password\": \"{{borrowerPassword}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/sign-in",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "sign-in"
+          ],
+          "query": []
+        },
+        "description": "US-12-T4: a user with the Borrower role. Set borrowerEmail and borrowerPassword."
+      }
+    },
+    {
+      "name": "10. Borrower: my history",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const page = pm.response.json();",
+              "pm.test('only my own records', () => {",
+              "  pm.expect(page.items.length).to.be.above(0);",
+              "  pm.expect(page.items.every((item) => item.borrowerUserId === pm.collectionVariables.get('ownUserId'))).to.be.true;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": []
+        },
+        "description": "Only the borrower's own records, with no filter at all."
+      }
+    },
+    {
+      "name": "11. Borrower: another user's history",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => {",
+              "  pm.response.to.have.status(403);",
+              "  const error = pm.response.json().error;",
+              "  pm.expect(error.code).to.eql('FORBIDDEN');",
+              "  pm.expect(error.message).to.eql('You can only view your own borrowing history');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/history?borrowerUserId={{staffUserId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "borrowerUserId",
+              "value": "{{staffUserId}}"
+            }
+          ]
+        },
+        "description": "Naming the staff user (their id came from the first sign-in) is refused."
+      }
+    },
+    {
+      "name": "12. Borrower: cannot return an asset",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{origin}}"
+          },
+          {
+            "key": "X-CSRF-Token",
+            "value": "{{csrfToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/borrowings/{{loanId}}/return",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "borrowings",
+            "{{loanId}}",
+            "return"
+          ],
+          "query": []
+        },
+        "description": "Returning needs borrowings.return."
+      }
+    },
+    {
+      "name": "13. Borrower: cannot read the activity log",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('403 FORBIDDEN', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/activity",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "activity"
+          ],
+          "query": []
+        },
+        "description": "The log needs activity.view."
       }
     }
   ]
