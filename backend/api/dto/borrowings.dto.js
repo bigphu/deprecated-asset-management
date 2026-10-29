@@ -6,17 +6,15 @@
  */
 
 const { checkQuery } = require('../validation');
+const { readPaging } = require('./paging');
 
 /** Values of the database-generated `asset_loans.status` column. */
 const STATUSES = ['ACTIVE', 'RETURNED', 'OVERDUE_RETURNED'];
 const SORT_KEYS = ['borrowedAt', 'dueAt', 'returnedAt', 'borrower', 'asset'];
 const SORT_DIRECTIONS = ['asc', 'desc'];
 
-const DEFAULT_PAGE_SIZE = 25;
-const MAX_PAGE_SIZE = 100;
-// Keeps OFFSET far inside bigint range; a larger value would be a 500 from Postgres, not a 422.
-const MAX_PAGE = 1_000_000;
 const MAX_SEARCH_LENGTH = 100;
+const USER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function readStatuses(c) {
   const statuses = c.codes('status');
@@ -31,6 +29,7 @@ function readStatuses(c) {
  *
  *   status=A&status=B   record status is A or B (omitted: every record)
  *   search=…            asset tag, asset name or borrower contains the text
+ *   borrowerUserId=…    only records of that user (a borrower may only name themselves)
  */
 function parseHistoryQuery(query) {
   const c = checkQuery(query);
@@ -38,13 +37,16 @@ function parseHistoryQuery(query) {
     filters: {
       status: readStatuses(c),
       search: c.string('search', { required: false, max: MAX_SEARCH_LENGTH }),
+      // Compared with session user ids, which are lower case.
+      borrowerUserId: c
+        .string('borrowerUserId', { required: false, max: 36, pattern: USER_ID, patternMessage: 'Must be a user id' })
+        ?.toLowerCase(),
     },
     sort: {
       key: c.oneOf('sort', SORT_KEYS, { required: false, fallback: 'borrowedAt' }),
       direction: c.oneOf('direction', SORT_DIRECTIONS, { required: false, fallback: 'desc' }),
     },
-    page: c.integer('page', { min: 1, max: MAX_PAGE, fallback: 1 }),
-    pageSize: c.integer('pageSize', { min: 1, max: MAX_PAGE_SIZE, fallback: DEFAULT_PAGE_SIZE }),
+    ...readPaging(c),
   });
 }
 
@@ -59,6 +61,7 @@ function toBorrowingDto(row) {
     status: row.loan_status,
     isOverdue: row.is_overdue,
     borrowerName: row.borrower_name,
+    borrowerUserId: row.borrower_user_id,
     borrowedAt: row.borrowed_at,
     dueAt: row.due_at,
     returnedAt: row.returned_at,
@@ -82,9 +85,6 @@ module.exports = {
   STATUSES,
   SORT_KEYS,
   SORT_DIRECTIONS,
-  DEFAULT_PAGE_SIZE,
-  MAX_PAGE_SIZE,
-  MAX_PAGE,
   parseHistoryQuery,
   toBorrowingDto,
 };

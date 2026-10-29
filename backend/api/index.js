@@ -20,6 +20,7 @@ const PROTECTED_ROUTES = [
   ['/asset-types', require('./routes/assetTypes')],
   ['/assets', require('./routes/assets')],
   ['/borrowings', require('./routes/borrowings')],
+  ['/activity', require('./routes/activity')],
   ['/export-profiles', require('./routes/exportProfiles')],
   ['/exports', require('./routes/exports')],
   ['/permissions', require('./routes/permissions')],

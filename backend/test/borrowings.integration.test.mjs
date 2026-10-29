@@ -25,9 +25,12 @@ let pool;
 let adminUser;
 let managerUser;
 let viewerUser;
+let borrowerUser;
+let otherBorrowerUser;
 let admin;
 let manager;
 let viewer;
+let borrower;
 let tagSeq = 0;
 
 class ApiClient {
@@ -87,13 +90,16 @@ async function insertAsset({ status = 'AVAILABLE', archived = false, name } = {}
   return rows[0];
 }
 
-async function insertLoan(assetId, { borrower = 'Nguyễn Văn An', borrowedAt, dueAt = null, returnedAt = null } = {}) {
+async function insertLoan(
+  assetId,
+  { borrower = 'Nguyễn Văn An', borrowedAt, dueAt = null, returnedAt = null, borrowerUserId = null } = {},
+) {
   const { rows } = await pool.query(
     `INSERT INTO asset_loans (asset_id, borrower_name, borrowed_at, due_at, returned_at,
-                              created_by_user_id, returned_by_user_id)
-     VALUES ($1, $2, $3, $4, $5::timestamptz, $6, CASE WHEN $5::timestamptz IS NULL THEN NULL ELSE $6::uuid END)
+                              created_by_user_id, returned_by_user_id, borrower_user_id)
+     VALUES ($1, $2, $3, $4, $5::timestamptz, $6, CASE WHEN $5::timestamptz IS NULL THEN NULL ELSE $6::uuid END, $7)
      RETURNING id`,
-    [assetId, borrower, borrowedAt || new Date(Date.now() - 3 * DAY), dueAt, returnedAt, adminUser.id],
+    [assetId, borrower, borrowedAt || new Date(Date.now() - 3 * DAY), dueAt, returnedAt, adminUser.id, borrowerUserId],
   );
   return rows[0].id;
 }
@@ -101,20 +107,22 @@ async function insertLoan(assetId, { borrower = 'Nguyễn Văn An', borrowedAt, 
 /** An asset that is on loan: status ON_LOAN plus one open loan. */
 async function openLoan({
   dueInMs = 2 * DAY, borrower, archived = false, status = 'ON_LOAN', name, borrowedAt = new Date(Date.now() - 3 * DAY),
+  borrowerUserId,
 } = {}) {
   const asset = await insertAsset({ status, archived, name });
   const id = await insertLoan(asset.id, {
     borrower,
     borrowedAt,
     dueAt: dueInMs === null ? null : new Date(Date.now() + dueInMs),
+    borrowerUserId,
   });
   return { id, asset };
 }
 
 /** A loan that was already returned (available asset, returned_at set). */
-async function closedLoan({ borrower, borrowedAt, dueAt = null, returnedAt }) {
+async function closedLoan({ borrower, borrowedAt, dueAt = null, returnedAt, borrowerUserId }) {
   const asset = await insertAsset();
-  return { id: await insertLoan(asset.id, { borrower, borrowedAt, dueAt, returnedAt }), asset };
+  return { id: await insertLoan(asset.id, { borrower, borrowedAt, dueAt, returnedAt, borrowerUserId }), asset };
 }
 
 describe('borrowings', { skip: skip || false }, () => {
@@ -130,6 +138,10 @@ describe('borrowings', { skip: skip || false }, () => {
     await assignSystemRole(managerUser.id, 'asset_manager');
     viewerUser = await provisionUser({ email: 'viewer@example.test', displayName: 'Viewer User', password: PASSWORD });
     await assignSystemRole(viewerUser.id, 'viewer');
+    borrowerUser = await provisionUser({ email: 'borrower@example.test', displayName: 'Bao Borrower', password: PASSWORD });
+    await assignSystemRole(borrowerUser.id, 'borrower');
+    otherBorrowerUser = await provisionUser({ email: 'borrower2@example.test', displayName: 'Bich Borrower', password: PASSWORD });
+    await assignSystemRole(otherBorrowerUser.id, 'borrower');
 
     server = app.listen(0);
     await new Promise((resolve) => server.once('listening', resolve));
@@ -137,6 +149,7 @@ describe('borrowings', { skip: skip || false }, () => {
     admin = await new ApiClient().signIn('admin@example.test');
     manager = await new ApiClient().signIn('manager@example.test');
     viewer = await new ApiClient().signIn('viewer@example.test');
+    borrower = await new ApiClient().signIn('borrower@example.test');
   });
 
   after(async () => {
@@ -157,9 +170,24 @@ describe('borrowings', { skip: skip || false }, () => {
     }
 
     test('Admin and Asset Manager may view and return; Viewer may do neither', async () => {
-      assert.deepEqual(await permissionsOf('admin'), ['borrowings.return', 'borrowings.view']);
+      assert.deepEqual(await permissionsOf('admin'), ['borrowings.return', 'borrowings.view', 'borrowings.viewOwn']);
       assert.deepEqual(await permissionsOf('asset_manager'), ['borrowings.return', 'borrowings.view']);
       assert.deepEqual(await permissionsOf('viewer'), []);
+    });
+
+    test('Admin holds every permission, Asset Manager may read the activity log, Borrower may only view their own history', async () => {
+      const keysOf = async (systemKey) =>
+        (await pool.query(
+          `SELECT rp.permission_key FROM fw_roles r JOIN fw_role_permissions rp ON rp.role_id = r.id
+            WHERE r.system_key = $1 ORDER BY rp.permission_key`,
+          [systemKey],
+        )).rows.map((row) => row.permission_key);
+      const all = (await pool.query('SELECT permission_key FROM fw_permissions ORDER BY permission_key')).rows.map((row) => row.permission_key);
+
+      assert.deepEqual(await keysOf('admin'), all);
+      assert.ok((await keysOf('asset_manager')).includes('activity.view'));
+      assert.ok(!(await keysOf('viewer')).some((key) => key.startsWith('borrowings.') || key === 'activity.view'));
+      assert.deepEqual(await keysOf('borrower'), ['borrowings.viewOwn']);
     });
 
     test('toggling the system-role guard during the migration left it enabled and effective', async () => {
@@ -174,6 +202,24 @@ describe('borrowings', { skip: skip || false }, () => {
            SELECT id, 'borrowings.return' FROM fw_roles WHERE system_key = 'viewer'`,
         ),
         /built-in system-role permissions are immutable/,
+      );
+    });
+
+    test('a borrowing record cannot be deleted: it is the audit history', async () => {
+      const { id } = await openLoan();
+      await assert.rejects(pool.query('DELETE FROM asset_loans WHERE id = $1', [id]), /cannot be deleted/);
+      assert.equal((await pool.query('SELECT 1 FROM asset_loans WHERE id = $1', [id])).rowCount, 1);
+    });
+
+    test('borrower_user_id must name a real user', async () => {
+      const asset = await insertAsset();
+      await assert.rejects(
+        pool.query(
+          `INSERT INTO asset_loans (asset_id, borrower_name, created_by_user_id, borrower_user_id)
+           VALUES ($1, 'Nobody', $2, '00000000-0000-4000-8000-000000000000')`,
+          [asset.id, adminUser.id],
+        ),
+        (err) => err.code === '23503',
       );
     });
 
@@ -360,7 +406,7 @@ describe('borrowings', { skip: skip || false }, () => {
       const [open, overdueReturned, onTime] = res.body.items;
       assert.deepEqual(
         Object.keys(open).sort(),
-        ['asset', 'borrowedAt', 'borrowerName', 'createdBy', 'dueAt', 'id', 'isOverdue', 'note', 'returnedAt', 'returnedBy', 'status'],
+        ['asset', 'borrowedAt', 'borrowerName', 'borrowerUserId', 'createdBy', 'dueAt', 'id', 'isOverdue', 'note', 'returnedAt', 'returnedBy', 'status'],
       );
       assert.deepEqual(
         Object.keys(open.asset).sort(),
@@ -479,6 +525,235 @@ describe('borrowings', { skip: skip || false }, () => {
       assert.equal(forbidden.status, 403);
       assert.equal(forbidden.body.error.code, 'FORBIDDEN');
       assert.equal((await history(admin, '', { auth: false })).status, 401);
+    });
+  });
+
+  describe('who sees which history (US12-T4)', () => {
+    const history = (client, query = '', options) =>
+      client.request('GET', `/borrowings/history${query ? '?' + query : ''}`, undefined, options);
+    const ids = (res) => res.body.items.map((item) => item.id);
+    const ago = (days) => new Date(Date.now() - days * DAY);
+    const deniedCount = async (userId) =>
+      (await pool.query(
+        `SELECT count(*)::int AS n FROM fw_security_events WHERE event_type = 'authz.permission_denied' AND actor_user_id = $1`,
+        [userId],
+      )).rows[0].n;
+    async function eventually(check, timeoutMs = 2000) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const value = await check();
+        if (value || Date.now() > deadline) return value;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+
+    test('a borrower sees only their own records, however they ask', async () => {
+      const own1 = await openLoan({ borrower: 'ZZOWN first', borrowerUserId: borrowerUser.id });
+      const own2 = await closedLoan({
+        borrower: 'ZZOWN second', borrowedAt: ago(6), dueAt: ago(4), returnedAt: ago(5), borrowerUserId: borrowerUser.id,
+      });
+      const others = await openLoan({ borrower: 'ZZOWN other account', borrowerUserId: otherBorrowerUser.id });
+      const unlinked = await openLoan({ borrower: 'ZZOWN name only' });
+      const mine = [own1.id, own2.id].sort();
+
+      const everything = await history(borrower);
+      assert.equal(everything.status, 200, JSON.stringify(everything.body));
+      assert.deepEqual(ids(everything).sort(), mine);
+      assert.equal(everything.body.total, 2);
+      assert.ok(everything.body.items.every((item) => item.borrowerUserId === borrowerUser.id));
+      // Naming themselves (in any letter case) is the same as not naming anyone, and a search cannot reach further.
+      assert.deepEqual(ids(await history(borrower, `borrowerUserId=${borrowerUser.id.toUpperCase()}`)).sort(), mine);
+      assert.deepEqual(ids(await history(borrower, 'search=ZZOWN')).sort(), mine);
+
+      // Staff see every record, and may narrow the list to one user.
+      assert.deepEqual(
+        ids(await history(manager, 'search=ZZOWN')).sort(),
+        [own1.id, own2.id, others.id, unlinked.id].sort(),
+      );
+      assert.deepEqual(ids(await history(manager, `borrowerUserId=${borrowerUser.id}`)).sort(), mine);
+      assert.deepEqual(ids(await history(admin, `borrowerUserId=${otherBorrowerUser.id}`)), [others.id]);
+    });
+
+    test("asking for another user's history is a 403 that is recorded", async () => {
+      for (const other of [managerUser.id, otherBorrowerUser.id.toUpperCase()]) {
+        const before = await deniedCount(borrowerUser.id);
+        const res = await history(borrower, `borrowerUserId=${other}`);
+        assert.equal(res.status, 403, JSON.stringify(res.body));
+        assert.equal(res.body.error.code, 'FORBIDDEN');
+        assert.equal(res.body.error.message, 'You can only view your own borrowing history');
+        assert.ok(await eventually(async () => (await deniedCount(borrowerUser.id)) > before), 'the refusal is logged');
+      }
+    });
+
+    test('a borrower cannot return an asset, and nothing changes', async () => {
+      const { id, asset } = await openLoan({ borrowerUserId: borrowerUser.id });
+      const res = await borrower.request('POST', `/borrowings/${id}/return`);
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error.code, 'FORBIDDEN');
+      assert.equal((await pool.query('SELECT returned_at FROM asset_loans WHERE id = $1', [id])).rows[0].returned_at, null);
+      assert.equal(
+        (await pool.query(
+          `SELECT s.code FROM assets a JOIN asset_statuses s ON s.id = a.asset_status_id WHERE a.id = $1`,
+          [asset.id],
+        )).rows[0].code,
+        'ON_LOAN',
+      );
+    });
+
+    test('a malformed user id is a 422 for staff and borrowers alike', async () => {
+      for (const client of [manager, borrower]) {
+        const res = await history(client, 'borrowerUserId=not-a-user');
+        assert.equal(res.status, 422);
+        assert.ok(res.body.error.fields.borrowerUserId);
+      }
+    });
+  });
+
+  describe('after a return (US11-T4, US12-T5)', () => {
+    const returnLoan = (client, id) => client.request('POST', `/borrowings/${id}/return`);
+    const assetStatus = async (assetId) =>
+      (await pool.query(
+        `SELECT s.code FROM assets a JOIN asset_statuses s ON s.id = a.asset_status_id WHERE a.id = $1`,
+        [assetId],
+      )).rows[0].code;
+
+    test('the borrowing record is preserved: only the return fields change and the asset is available again', async () => {
+      const { id, asset } = await openLoan({ borrowerUserId: borrowerUser.id });
+      const kept = async () =>
+        (await pool.query(
+          `SELECT asset_id, borrower_name, borrower_user_id, borrowed_at, due_at, note, created_by_user_id, created_at
+             FROM asset_loans WHERE id = $1`,
+          [id],
+        )).rows[0];
+      const rowsFor = async () =>
+        (await pool.query('SELECT count(*)::int AS n FROM asset_loans WHERE asset_id = $1', [asset.id])).rows[0].n;
+      const before = await kept();
+      assert.equal(await assetStatus(asset.id), 'ON_LOAN');
+
+      assert.equal((await returnLoan(manager, id)).status, 200);
+
+      assert.deepEqual(await kept(), before, 'borrower, dates and author are untouched');
+      assert.equal(await rowsFor(), 1, 'the record was not replaced or removed');
+      assert.equal(await assetStatus(asset.id), 'AVAILABLE');
+      const row = (await pool.query('SELECT returned_at, returned_by_user_id, status FROM asset_loans WHERE id = $1', [id])).rows[0];
+      assert.equal(row.returned_by_user_id, managerUser.id);
+      assert.notEqual(row.returned_at, null);
+      assert.equal(row.status, 'RETURNED');
+    });
+
+    test('the same record moves from ACTIVE to RETURNED in the history, for staff and for its borrower', async () => {
+      const { id } = await openLoan({ borrower: 'ZZFLOW', borrowerUserId: borrowerUser.id, dueInMs: DAY });
+      const find = async (client, extra = '') =>
+        (await client.request('GET', `/borrowings/history?search=ZZFLOW${extra}`)).body;
+
+      const before = await find(manager);
+      assert.equal(before.total, 1);
+      assert.deepEqual(
+        [before.items[0].id, before.items[0].status, before.items[0].returnedAt, before.items[0].returnedBy],
+        [id, 'ACTIVE', null, null],
+      );
+      assert.deepEqual((await find(manager, '&status=ACTIVE')).items.map((item) => item.id), [id]);
+
+      assert.equal((await returnLoan(manager, id)).status, 200);
+
+      const after = await find(manager);
+      assert.equal(after.total, 1, 'still listed: returning does not remove it from the history');
+      assert.equal(after.items[0].id, id);
+      assert.equal(after.items[0].status, 'RETURNED');
+      assert.equal(after.items[0].asset.status, 'AVAILABLE');
+      assert.deepEqual(after.items[0].returnedBy, { id: managerUser.id, displayName: 'Manager User' });
+      assert.match(after.items[0].returnedAt, /^\d{4}-\d\d-\d\dT/);
+      assert.equal((await find(manager, '&status=ACTIVE')).total, 0, 'no longer among the assets still out');
+      assert.deepEqual((await find(manager, '&status=RETURNED')).items.map((item) => item.id), [id]);
+
+      const mine = await find(borrower);
+      assert.deepEqual([mine.items[0].id, mine.items[0].status], [id, 'RETURNED'], 'the borrower sees the same change');
+    });
+  });
+
+  describe('activity log (US11-T5)', () => {
+    const activity = (client, query = '', options) =>
+      client.request('GET', `/activity${query ? '?' + query : ''}`, undefined, options);
+    const returnLoan = (client, id, options) =>
+      client.request('POST', `/borrowings/${id}/return`, undefined, options);
+    const returnedTotal = async () => (await activity(manager, 'action=ASSET_RETURNED&pageSize=1')).body.total;
+
+    test('a return is logged as ASSET_RETURNED with who did it and when', async () => {
+      const { id, asset } = await openLoan({ borrower: 'ZZACT hidden borrower name' });
+      const before = Date.now();
+      assert.equal((await returnLoan(manager, id)).status, 200);
+
+      const res = await activity(manager, 'action=ASSET_RETURNED');
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      const entry = res.body.items[0];
+      assert.deepEqual(Object.keys(entry).sort(), ['action', 'actor', 'asset', 'description', 'id', 'occurredAt']);
+      assert.equal(entry.action, 'ASSET_RETURNED');
+      assert.deepEqual(entry.actor, { id: managerUser.id, displayName: 'Manager User' });
+      assert.deepEqual(entry.asset, { id: asset.id, tag: asset.tag, name: `Laptop ${asset.tag}` });
+      assert.equal(entry.description, `Asset ${asset.tag} returned`);
+      assert.ok(Math.abs(Date.parse(entry.occurredAt) - before) < 10_000, 'timestamp is when the return happened');
+      assert.ok(!JSON.stringify(res.body).includes('ZZACT'), 'the borrower name is not in the log');
+      assert.ok(!JSON.stringify(res.body).includes('@'), 'no e-mail address is in the log');
+    });
+
+    test('invalid, refused and repeated returns add nothing to the log', async () => {
+      const { id } = await openLoan();
+      const start = await returnedTotal();
+
+      assert.equal((await returnLoan(viewer, id)).status, 403);
+      assert.equal((await returnLoan(borrower, id)).status, 403);
+      assert.equal((await returnLoan(admin, id, { csrf: false })).status, 403);
+      assert.equal((await returnLoan(admin, '00000000-0000-4000-8000-000000000000')).status, 404);
+      assert.equal((await returnLoan(admin, 'not-a-uuid')).status, 404);
+      assert.equal(await returnedTotal(), start, 'nothing was logged for requests that did not return anything');
+
+      assert.equal((await returnLoan(manager, id)).status, 200);
+      assert.equal(await returnedTotal(), start + 1);
+      assert.equal((await returnLoan(admin, id)).status, 409);
+      assert.equal(await returnedTotal(), start + 1, 'a repeated return is not logged a second time');
+    });
+
+    test('shows every kind of asset event newest first, filtered by action and paged', async () => {
+      const created = await admin.request('POST', '/assets', {
+        tag: 'ACT-0001', name: 'Activity laptop', type: 'LAPTOP', status: 'AVAILABLE', location: 'HQ', purchaseDate: '2024-01-15',
+      });
+      assert.equal(created.status, 201);
+      assert.equal((await admin.request('DELETE', `/assets/${created.body.id}`)).status, 204);
+
+      const kinds = async (query) => (await activity(admin, query)).body.items;
+      const [newestCreated] = await kinds('action=ASSET_CREATED');
+      assert.equal(newestCreated.asset.tag, 'ACT-0001');
+      const [archived] = await kinds('action=asset_archived');
+      assert.deepEqual([archived.action, archived.asset.tag], ['ASSET_ARCHIVED', 'ACT-0001'], 'archived assets still list');
+
+      const both = await kinds('action=ASSET_ARCHIVED&action=ASSET_CREATED&pageSize=100');
+      assert.ok(both.length >= 2 && both.every((item) => ['ASSET_ARCHIVED', 'ASSET_CREATED'].includes(item.action)));
+      const times = (await kinds('pageSize=100')).map((item) => Date.parse(item.occurredAt));
+      assert.deepEqual(times, [...times].sort((a, b) => b - a), 'newest first');
+
+      const first = await activity(admin, 'pageSize=2');
+      const second = await activity(admin, 'pageSize=2&page=2');
+      assert.equal(first.body.items.length, 2);
+      assert.equal(second.body.total, first.body.total);
+      assert.ok(!second.body.items.some((item) => first.body.items.some((other) => other.id === item.id)));
+      const beyond = await activity(admin, 'pageSize=2&page=100000');
+      assert.deepEqual([beyond.status, beyond.body.items.length, beyond.body.page], [200, 0, 100000]);
+    });
+
+    test('rejects invalid query parameters with every bad field named', async () => {
+      for (const [query, field] of [['action=ASSET_NOPE', 'action'], ['page=0', 'page'], ['pageSize=101', 'pageSize']]) {
+        const res = await activity(admin, query);
+        assert.equal(res.status, 422, query);
+        assert.ok(res.body.error.fields[field], `${query} names ${field}`);
+      }
+    });
+
+    test('needs activity.view: Admin and Manager read it; Viewer, Borrower and anonymous callers do not', async () => {
+      assert.equal((await activity(admin)).status, 200);
+      assert.equal((await activity(manager)).status, 200);
+      assert.equal((await activity(viewer)).status, 403);
+      assert.equal((await activity(borrower)).status, 403);
+      assert.equal((await activity(admin, '', { auth: false })).status, 401);
     });
   });
 });

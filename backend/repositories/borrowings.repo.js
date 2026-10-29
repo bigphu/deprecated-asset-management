@@ -16,7 +16,7 @@ const SELECT_BORROWING = `
   SELECT l.id,
          l.status AS loan_status,
          (l.returned_at IS NULL AND l.due_at IS NOT NULL AND l.due_at < now()) AS is_overdue,
-         l.borrower_name, l.borrowed_at, l.due_at, l.returned_at, l.note,
+         l.borrower_name, l.borrower_user_id, l.borrowed_at, l.due_at, l.returned_at, l.note,
          l.asset_id,
          a.asset_tag::text AS asset_tag,
          a.name AS asset_name,
@@ -41,7 +41,7 @@ const ORDER_COLUMNS = {
   asset: 'a.asset_tag',
 };
 
-function buildWhere({ status = [], search } = {}) {
+function buildWhere({ status = [], search, borrowerUserId } = {}) {
   const clauses = [];
   const params = [];
   const add = (sql, value) => {
@@ -50,6 +50,7 @@ function buildWhere({ status = [], search } = {}) {
   };
 
   if (status.length) add('l.status = ANY(?)', status);
+  if (borrowerUserId) add('l.borrower_user_id = ?', borrowerUserId);
   if (search) add('(a.asset_tag ILIKE ? OR a.name ILIKE ? OR l.borrower_name ILIKE ?)', '%' + escapeLike(search) + '%');
 
   return { where: clauses.length ? 'WHERE ' + clauses.join(' AND ') : '', params };

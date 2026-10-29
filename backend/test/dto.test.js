@@ -4,6 +4,7 @@ const { parseCreateAsset, parseUpdateAsset, parseListQuery } = require('../api/d
 const { parseProfileInput, toProfileDto } = require('../api/dto/exportProfiles.dto');
 const { parseExportRequest } = require('../api/dto/exports.dto');
 const { parseHistoryQuery } = require('../api/dto/borrowings.dto');
+const { parseActivityQuery, toActivityDto } = require('../api/dto/activity.dto');
 
 const validAsset = {
   tag: 'LAP-1001',
@@ -148,7 +149,7 @@ test('export request: nested errors are keyed by path', () => {
 
 test('history query: defaults, repeated statuses, trimmed search and limits', () => {
   assert.deepEqual(parseHistoryQuery({}), {
-    filters: { status: [], search: undefined },
+    filters: { status: [], search: undefined, borrowerUserId: undefined },
     sort: { key: 'borrowedAt', direction: 'desc' },
     page: 1,
     pageSize: 25,
@@ -156,7 +157,7 @@ test('history query: defaults, repeated statuses, trimmed search and limits', ()
   const q = parseHistoryQuery({
     status: ['active', 'RETURNED', 'active'], search: ' laptop ', sort: 'dueAt', direction: 'asc', page: '2', pageSize: '100',
   });
-  assert.deepEqual(q.filters, { status: ['ACTIVE', 'RETURNED'], search: 'laptop' });
+  assert.deepEqual(q.filters, { status: ['ACTIVE', 'RETURNED'], search: 'laptop', borrowerUserId: undefined });
   assert.deepEqual(q.sort, { key: 'dueAt', direction: 'asc' });
   assert.deepEqual([q.page, q.pageSize], [2, 100]);
 });
@@ -173,4 +174,31 @@ test('history query: rejects a NUL character in search and an absurd page number
   const err = fieldsOf(() => parseHistoryQuery({ search: 'a\u0000b', page: '1000001' }));
   assert.equal(err.status, 422);
   assert.deepEqual(Object.keys(err.fields).sort(), ['page', 'search']);
+});
+
+test('history query: borrowerUserId is lower-cased and must be a user id', () => {
+  const id = '3F2504E0-4F89-41D3-9A0C-0305E82C3301';
+  assert.equal(parseHistoryQuery({ borrowerUserId: id }).filters.borrowerUserId, id.toLowerCase());
+  const err = fieldsOf(() => parseHistoryQuery({ borrowerUserId: 'someone' }));
+  assert.equal(err.status, 422);
+  assert.deepEqual(Object.keys(err.fields), ['borrowerUserId']);
+});
+
+test('activity query: action names map to event types; unknown ones and bad paging are 422', () => {
+  assert.deepEqual(parseActivityQuery({}), { filters: { eventTypes: [] }, page: 1, pageSize: 25 });
+  assert.deepEqual(parseActivityQuery({ action: ['asset_returned', 'ASSET_CREATED'] }).filters.eventTypes, ['returned', 'created']);
+  const err = fieldsOf(() => parseActivityQuery({ action: 'ASSET_NOPE', page: '0', pageSize: '101' }));
+  assert.deepEqual(Object.keys(err.fields).sort(), ['action', 'page', 'pageSize']);
+});
+
+test('activity dto: action label, actor and asset; a system event has no actor', () => {
+  const row = {
+    id: 'e1', event_type: 'returned', occurred_at: new Date('2026-10-25T12:00:00Z'), description: 'Asset A returned',
+    actor_user_id: 'u1', actor_name: 'Minh', asset_id: 'a1', asset_tag: 'A-1', asset_name: 'Laptop',
+  };
+  assert.deepEqual(toActivityDto(row), {
+    id: 'e1', action: 'ASSET_RETURNED', occurredAt: row.occurred_at, description: 'Asset A returned',
+    actor: { id: 'u1', displayName: 'Minh' }, asset: { id: 'a1', tag: 'A-1', name: 'Laptop' },
+  });
+  assert.equal(toActivityDto({ ...row, actor_user_id: null, actor_name: null }).actor, null);
 });
