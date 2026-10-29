@@ -18,6 +18,9 @@ const InventoryPage = lazy(() =>
 const BorrowingsPage = lazy(() =>
   import('@/features/borrowings').then((module) => ({ default: module.BorrowingsPage })),
 )
+const ActivityPage = lazy(() =>
+  import('@/features/activity').then((module) => ({ default: module.ActivityPage })),
+)
 const ExportProfilesPage = lazy(() =>
   import('@/features/export-profiles').then((module) => ({ default: module.ExportProfilesPage })),
 )
@@ -60,8 +63,16 @@ export function AppRouter() {
             <Route
               path="/borrowings"
               element={
-                <RequirePermission permission="borrowings.view">
+                <RequirePermission permissions={['borrowings.view', 'borrowings.viewOwn']} mode="any">
                   <BorrowingsPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/activity"
+              element={
+                <RequirePermission permission="activity.view">
+                  <ActivityPage />
                 </RequirePermission>
               }
             />

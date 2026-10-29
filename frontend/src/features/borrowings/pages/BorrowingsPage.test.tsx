@@ -15,6 +15,7 @@ function borrowing(overrides: Partial<Borrowing> = {}): Borrowing {
     status: 'ACTIVE',
     isOverdue: false,
     borrowerName: 'Nguyễn Văn An',
+    borrowerUserId: 'u-9',
     borrowedAt: '2026-10-20T08:30:00.000Z',
     dueAt: '2026-10-30T08:30:00.000Z',
     returnedAt: null,
@@ -191,6 +192,9 @@ describe('BorrowingsPage', () => {
     for (const text of ['Dell U2723QE', 'Trần Thị Bích', 'Alex Morgan', 'Manager User', 'Returned late']) {
       expect(within(dialog).getByText(text)).toBeInTheDocument()
     }
+    for (const label of ['Borrow date', 'Due date', 'Actual return date']) {
+      expect(within(dialog).getByText(label)).toBeInTheDocument()
+    }
     await user.click(within(dialog).getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Borrowing details' })).not.toBeInTheDocument())
   })
@@ -226,6 +230,30 @@ describe('BorrowingsPage', () => {
     )
     renderPage(['borrowings.view'])
     expect(await screen.findByText("Couldn't load borrowings")).toBeInTheDocument()
+  })
+
+  it('labels the columns with the borrower, asset, borrow, due and actual return dates and the status', async () => {
+    serveHistory(() => page([returnedLate, borrowing()]))
+    const { user } = renderPage(['borrowings.view'])
+    expect(await screen.findByRole('heading', { name: 'Borrowings' })).toBeInTheDocument()
+    await screen.findByText('LAP-1001')
+    expect(screen.queryByRole('columnheader', { name: 'Actual return date' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+
+    for (const name of ['Asset', 'Borrower', 'Borrow date', 'Due date', 'Actual return date', 'Status']) {
+      expect(await screen.findByRole('columnheader', { name })).toBeInTheDocument()
+    }
+    expect(await screen.findByText('Returned late')).toBeInTheDocument()
+  })
+
+  it('shows a borrower only "My borrowings" and never offers Return', async () => {
+    serveHistory()
+    renderPage(['borrowings.viewOwn'])
+
+    expect(await screen.findByRole('heading', { name: 'My borrowings' })).toBeInTheDocument()
+    expect(await screen.findByText('LAP-1001')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Return / })).not.toBeInTheDocument()
   })
 
   it('only promises "Available" when the asset was on loan', async () => {

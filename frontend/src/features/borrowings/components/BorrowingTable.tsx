@@ -73,9 +73,9 @@ export function BorrowingTable({
             <Table.Row>
               <Table.HeaderCell>Asset</Table.HeaderCell>
               <Table.HeaderCell>Borrower</Table.HeaderCell>
-              <Table.HeaderCell>Borrowed on</Table.HeaderCell>
-              <Table.HeaderCell>Due</Table.HeaderCell>
-              {showReturned && <Table.HeaderCell>Returned on</Table.HeaderCell>}
+              <Table.HeaderCell>Borrow date</Table.HeaderCell>
+              <Table.HeaderCell>Due date</Table.HeaderCell>
+              {showReturned && <Table.HeaderCell>Actual return date</Table.HeaderCell>}
               <Table.HeaderCell>Status</Table.HeaderCell>
               <Table.HeaderCell aria-label="Actions" />
             </Table.Row>

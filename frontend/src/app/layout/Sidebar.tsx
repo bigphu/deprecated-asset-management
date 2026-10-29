@@ -5,6 +5,7 @@ import {
   Boxes,
   ChevronLeft,
   FileOutput,
+  History as HistoryIcon,
   LogOut,
   Shapes,
   ShieldCheck,
@@ -39,7 +40,9 @@ const NAV_ITEMS: NavItem[] = [
     to: '/borrowings',
     label: 'Borrowings',
     icon: <ArrowLeftRight />,
-    permissions: ['borrowings.view'],
+    // Staff see every record; a borrower sees only their own (the API enforces it).
+    permissions: ['borrowings.view', 'borrowings.viewOwn'],
+    mode: 'any',
   },
   {
     to: '/export-profiles',
@@ -52,6 +55,12 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Asset types',
     icon: <Shapes />,
     permissions: ['assets.view'],
+  },
+  {
+    to: '/activity',
+    label: 'Activity',
+    icon: <HistoryIcon />,
+    permissions: ['activity.view'],
   },
   {
     to: '/admin/access',

@@ -7,6 +7,8 @@ export const PERMISSIONS = [
   'exports.run',
   'borrowings.view',
   'borrowings.return',
+  'borrowings.viewOwn',
+  'activity.view',
   'exportProfiles.view',
   'exportProfiles.create',
   'exportProfiles.update',

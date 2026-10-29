@@ -33,6 +33,8 @@ export interface Borrowing {
   /** Not returned and past the due date. Always false once returned. */
   isOverdue: boolean
   borrowerName: string
+  /** The borrower's user account, when they have one. */
+  borrowerUserId: string | null
   borrowedAt: string
   dueAt: string | null
   returnedAt: string | null

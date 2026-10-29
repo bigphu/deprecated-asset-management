@@ -27,6 +27,8 @@ const TAB_QUERY: Record<Tab, Pick<BorrowingHistoryParams, 'status' | 'sort' | 'd
 export function BorrowingsPage() {
   const { data: session } = useCurrentSessionQuery()
   const canReturn = hasPermission(session, 'borrowings.return')
+  // Without borrowings.view the API only returns the caller's own records.
+  const seesEveryone = hasPermission(session, 'borrowings.view')
 
   const [tab, setTab] = useState<Tab>('active')
   const [page, setPage] = useState(1)
@@ -64,8 +66,12 @@ export function BorrowingsPage() {
   return (
     <>
       <PageHeader
-        title="Borrowings"
-        subtitle="Assets that are out on loan, and the history of everything borrowed and returned."
+        title={seesEveryone ? 'Borrowings' : 'My borrowings'}
+        subtitle={
+          seesEveryone
+            ? 'Assets that are out on loan, and the history of everything borrowed and returned.'
+            : 'The assets you have borrowed, and the history of what you returned.'
+        }
       />
 
       <div className={styles.toolbar}>
